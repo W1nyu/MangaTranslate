@@ -1,0 +1,14 @@
+.venv/
+.argos/
+.env
+.env.*
+!.env.example
+# Local spend ledger for the paid translation fallback. Personal usage data,
+# and meaningless on another machine.
+.paid-usage.json
+tmp/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.DS_Store

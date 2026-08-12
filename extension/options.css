@@ -1,0 +1,89 @@
+:root {
+  color: #29232e;
+  background: #f7f3eb;
+  font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { min-width: 760px; margin: 0; }
+button, input, select { font: inherit; }
+
+.page-shell { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 58px 0 80px; }
+.page-header { display: flex; align-items: center; gap: 16px; margin-bottom: 30px; }
+.brand-mark { display: grid; width: 51px; height: 51px; place-items: center; border-radius: 16px; background: linear-gradient(145deg, #765891, #403049); box-shadow: 0 9px 23px rgba(68, 44, 84, .2); color: #fffaf3; font-size: 25px; font-weight: 800; }
+.eyebrow { margin: 0 0 5px; color: #8d7d8e; font-size: 10px; font-weight: 800; letter-spacing: .11em; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 5px; font-size: 28px; letter-spacing: -.05em; }
+h2 { margin-bottom: 4px; font-size: 19px; letter-spacing: -.045em; }
+.subtitle { margin-bottom: 0; color: #716774; font-size: 13px; }
+
+.layout { display: grid; grid-template-columns: minmax(310px, .82fr) minmax(520px, 1.4fr); align-items: start; gap: 18px; }
+.panel { padding: 23px; border: 1px solid rgba(102, 78, 111, .14); border-radius: 20px; background: rgba(255,255,255,.72); box-shadow: 0 12px 30px rgba(66, 48, 69, .055); }
+.panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 22px; }
+.panel-heading > div > p:not(.eyebrow) { margin: 0; color: #716875; font-size: 12px; line-height: 1.5; }
+.status-badge { padding: 6px 9px; border: 1px solid #e0d7dd; border-radius: 999px; color: #776d79; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.status-badge.ready { border-color: #bce1d2; background: #f0faf5; color: #2f785b; }
+.status-badge.error { border-color: #f0c9c4; background: #fff4f2; color: #a2534d; }
+
+.field { display: grid; gap: 7px; color: #625967; font-size: 12px; font-weight: 750; }
+.field small { color: #8a808b; font-size: 10px; font-weight: 550; line-height: 1.5; }
+.field input:not([type="range"]), .field select { width: 100%; min-height: 39px; padding: 8px 10px; border: 1px solid #ded5df; border-radius: 10px; outline: none; background: #fffdf9; color: #302936; font-size: 13px; font-weight: 650; }
+.field input:focus, .field select:focus { border-color: #8565a0; box-shadow: 0 0 0 3px rgba(133, 101, 160, .13); }
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 17px 21px; margin-top: 23px; }
+.field output { float: right; color: #806095; font-size: 11px; }
+input[type="range"] { width: 100%; margin: 4px 0 0; accent-color: #745590; }
+.button-row, .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+button { min-height: 37px; padding: 0 13px; border: 0; border-radius: 10px; cursor: pointer; font-size: 12px; font-weight: 800; }
+button.primary { background: linear-gradient(135deg, #765790, #51396a); box-shadow: 0 5px 13px rgba(81, 57, 106, .2); color: #fff; }
+button.secondary { border: 1px solid #dcd2dc; background: #fffdf9; color: #66596c; }
+button:hover { transform: translateY(-1px); }
+.feedback { min-height: 18px; margin: 12px 0 0; color: #667a6e; font-size: 11px; font-weight: 650; }
+.feedback.error { color: #ad544d; }
+
+/* Spending real money is the one setting on this page that is not reversible
+   after the fact, so it gets its own framed block instead of sitting in the
+   run of ordinary checkboxes. */
+.paid-fallback { margin-top: 20px; padding: 15px 16px 13px; border: 1px solid #e7d7bd; border-radius: 14px; background: #fffaf0; }
+.paid-fallback .eyebrow { color: #9d7a45; }
+.paid-fallback code { padding: 1px 4px; border-radius: 5px; background: #f3e8d6; font-size: 10px; }
+.paid-fallback input[type="checkbox"] { accent-color: #b07c33; }
+.paid-usage { margin: 11px 0 0; padding-top: 10px; border-top: 1px dashed #e8d9c0; color: #806a4c; font-size: 11px; font-weight: 700; }
+.paid-usage.warn { color: #a25f3c; }
+.paid-usage.off { color: #8f8792; }
+
+.glossary-title { margin-bottom: 18px; }
+.sample-button, .link-button { min-height: 0; padding: 4px 0; border-radius: 0; background: transparent; color: #715188; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
+.glossary-form { display: grid; grid-template-columns: minmax(120px, 1fr) 18px minmax(120px, 1fr) 116px 116px 76px; align-items: end; gap: 10px; padding: 16px; border: 1px solid #e5dce5; border-radius: 14px; background: #fcfaf5; }
+.to-mark { align-self: center; padding-top: 20px; color: #8968a1; font-size: 18px; font-weight: 800; text-align: center; }
+.field.compact { font-size: 11px; }
+.field.compact input, .field.compact select { font-size: 12px; }
+.form-options { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 14px; padding-top: 3px; color: #665c69; font-size: 11px; font-weight: 650; }
+.form-options input { accent-color: #75568f; }
+.form-actions { grid-column: 1 / -1; margin-top: 1px; }
+.glossary-list-wrap { margin-top: 23px; }
+.list-heading { display: flex; justify-content: space-between; margin-bottom: 8px; color: #786d78; font-size: 11px; font-weight: 800; }
+.glossary-list { overflow: hidden; border: 1px solid #e6dde5; border-radius: 13px; background: #fffefa; }
+.glossary-item { display: grid; grid-template-columns: 1fr 20px 1fr auto; align-items: center; gap: 9px; padding: 12px 13px; border-bottom: 1px solid #eee7ed; }
+.glossary-item:last-child { border-bottom: 0; }
+.glossary-item.disabled { opacity: .52; }
+.term { overflow: hidden; color: #312a36; font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.term.target { color: #65477d; }
+.item-arrow { color: #a18aa9; font-weight: 800; }
+.item-meta { display: flex; align-items: center; gap: 7px; margin-top: 3px; color: #8c818c; font-size: 10px; font-weight: 600; }
+.tag { padding: 2px 5px; border-radius: 999px; background: #f0eaf1; color: #786181; font-size: 9px; font-weight: 800; }
+.item-actions { display: flex; gap: 3px; }
+.item-actions button { min-width: 32px; min-height: 29px; padding: 0 6px; background: transparent; color: #715487; font-size: 10px; }
+.item-actions button.delete { color: #ad5d55; }
+.empty-list { padding: 30px 15px; color: #968c96; font-size: 12px; font-weight: 650; text-align: center; }
+
+@media (max-width: 900px) {
+  body { min-width: 0; }
+  .page-shell { width: min(700px, calc(100% - 32px)); padding-top: 34px; }
+  .layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 650px) {
+  .glossary-form { grid-template-columns: 1fr 18px 1fr; }
+  .glossary-form .compact { grid-column: span 1; }
+  .field-grid { grid-template-columns: 1fr; }
+}

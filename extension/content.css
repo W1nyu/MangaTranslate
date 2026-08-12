@@ -1,0 +1,288 @@
+:host {
+  all: initial;
+}
+
+.overlay-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  color: #241f2d;
+  font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+}
+
+.regions {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.translation-region {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: clamp(1px, 0.28vw, 5px);
+  border: 0;
+  border-radius: clamp(3px, 0.55vw, 11px);
+  background: rgb(255 255 255 / var(--overlay-opacity, 0.93));
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.36);
+  color: #211f26;
+  outline: none;
+  pointer-events: none;
+  text-align: center;
+  transition: opacity 140ms ease;
+  will-change: transform;
+}
+
+/* A remembered translation the reader is pointing at comes back even while the
+   layer is showing the original artwork. */
+.translation-region.show-original.is-hover-revealed {
+  background: rgb(255 255 255 / var(--overlay-opacity, 0.93));
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.36), 0 2px 10px rgb(0 0 0 / 0.18);
+}
+
+.translation-region.show-original.is-hover-revealed .translation-copy {
+  visibility: visible;
+}
+
+.translation-copy {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  color: inherit;
+  font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1.22;
+  letter-spacing: -0.035em;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+  white-space: pre-wrap;
+}
+
+.translation-region.is-overflowing {
+  padding: 0;
+}
+
+.translation-region.show-original {
+  background: transparent;
+  box-shadow: none;
+}
+
+.translation-region.show-original .translation-copy {
+  visibility: hidden;
+}
+
+.translation-toolbar {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 5px 6px 5px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 12px;
+  background: rgba(27, 23, 35, 0.9);
+  box-shadow: 0 7px 22px rgba(0, 0, 0, 0.28);
+  color: #fff;
+  pointer-events: auto;
+  user-select: none;
+  z-index: 2;
+}
+
+.region-selection {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: auto;
+  outline: none;
+}
+
+.region-selection-surface {
+  position: absolute;
+  inset: 0;
+  background: rgba(16, 13, 23, 0.28);
+  cursor: crosshair;
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.region-selection-box {
+  position: absolute;
+  box-sizing: border-box;
+  min-width: 1px;
+  min-height: 1px;
+  border: 2px solid #8ee7ff;
+  border-radius: 5px;
+  background: rgba(142, 231, 255, 0.05);
+  box-shadow: 0 0 0 100vmax rgba(16, 13, 23, 0.36), 0 0 0 1px rgba(0, 0, 0, 0.58);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.region-selection-panel {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 12px;
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 24px));
+  padding: 10px 11px 9px;
+  border: 1px solid rgba(177, 238, 255, 0.45);
+  border-radius: 12px;
+  background: rgba(21, 26, 38, 0.96);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.34);
+  color: #f3fbff;
+  font-size: 12px;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+  pointer-events: auto;
+  transform: translateX(-50%);
+  z-index: 2;
+}
+
+.region-selection-panel strong {
+  align-self: end;
+  color: #b6efff;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.region-selection-panel span {
+  grid-column: 1;
+  color: rgba(243, 251, 255, 0.78);
+}
+
+.region-selection-actions {
+  grid-row: span 2;
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.region-selection-actions button {
+  height: 29px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+  cursor: pointer;
+  font: 650 11px/1 Pretendard, "Noto Sans KR", sans-serif;
+}
+
+.region-selection-actions button:hover,
+.region-selection-actions button:focus-visible {
+  border-color: rgba(174, 239, 255, 0.72);
+  outline: none;
+  background: rgba(142, 231, 255, 0.2);
+}
+
+.region-selection.is-saving .region-selection-surface {
+  cursor: progress;
+  pointer-events: none;
+}
+
+.reload-required {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  box-sizing: border-box;
+  max-width: min(390px, calc(100vw - 24px));
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 211, 125, 0.52);
+  border-radius: 12px;
+  background: rgba(48, 35, 18, 0.95);
+  box-shadow: 0 7px 22px rgba(0, 0, 0, 0.28);
+  color: #fff5dc;
+  font-size: 12px;
+  line-height: 1.45;
+  letter-spacing: -0.02em;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.reload-required strong,
+.reload-required span {
+  display: block;
+}
+
+.reload-required strong {
+  margin-bottom: 2px;
+  color: #ffe0a1;
+  font-weight: 750;
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(42vw, 240px);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #a8a1ae;
+}
+
+.status-dot[data-state="working"] {
+  background: #8ef0d1;
+  box-shadow: 0 0 0 3px rgba(142, 240, 209, 0.15);
+}
+
+.status-dot[data-state="ready"] {
+  background: #8ed0ff;
+}
+
+.status-dot[data-state="error"] {
+  background: #ff9e9e;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 3px;
+}
+
+.toolbar-actions button {
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font: 600 12px/1 Pretendard, "Noto Sans KR", sans-serif;
+}
+
+.toolbar-actions button:hover,
+.toolbar-actions button:focus-visible,
+.toolbar-actions button.active {
+  outline: none;
+  background: rgba(255, 255, 255, 0.18);
+}

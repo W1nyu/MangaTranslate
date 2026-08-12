@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>말풍선 번역 레이어 설정</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <div class="brand-mark" aria-hidden="true">가</div>
+        <div>
+          <p class="eyebrow">LOCAL WEBTOON TRANSLATOR</p>
+          <h1>번역 레이어 설정</h1>
+          <p class="subtitle">화면은 지정한 내 컴퓨터의 로컬 서버에서만 OCR·번역됩니다.</p>
+        </div>
+      </header>
+
+      <div class="layout">
+        <section class="panel behavior-panel" aria-labelledby="behavior-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">ENGINE &amp; DISPLAY</p>
+              <h2 id="behavior-heading">로컬 엔진과 표시 방식</h2>
+            </div>
+            <span class="status-badge" data-server-status>서버 확인 중</span>
+          </div>
+
+          <label class="field full-width">
+            <span>로컬 서버 주소</span>
+            <input type="url" data-server-url inputmode="url" placeholder="http://127.0.0.1:8765">
+            <small>개인정보 보호를 위해 <code>127.0.0.1</code> 또는 <code>localhost</code>만 허용됩니다.</small>
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>스크롤을 멈춘 뒤 대기 시간 <output data-delay-value></output></span>
+              <input type="range" data-scan-delay min="200" max="2500" step="20">
+            </label>
+            <label class="field">
+              <span>OCR 최소 신뢰도 <output data-confidence-value></output></span>
+              <input type="range" data-min-confidence min="0.2" max="0.95" step="0.05">
+            </label>
+            <label class="field">
+              <span>번역 패치 불투명도 <output data-opacity-value></output></span>
+              <input type="range" data-overlay-opacity min="0.35" max="1" step="0.05">
+            </label>
+            <label class="field">
+              <span>번역 글자 크기 <output data-font-value></output></span>
+              <input type="range" data-font-scale min="0.7" max="1.7" step="0.05">
+            </label>
+          </div>
+          <label class="field full-width">
+            <span><input type="checkbox" data-require-complete-bubble> 말풍선이 다 보일 때만 번역</span>
+            <small>화면 가장자리에 잘린 말풍선과, 말풍선 없이 그림 위에 그려진 글자는 건너뜁니다. 잘린 말풍선은 스크롤해서 전체가 보이면 번역합니다.</small>
+          </label>
+          <label class="field full-width">
+            <span><input type="checkbox" data-hover-reveal> 마우스를 올리면 숨긴 번역 다시 보기</span>
+            <small>“원문” 보기 중에도 말풍선 위에 마우스를 올리면 기억해 둔 번역이 잠시 나타납니다.</small>
+          </label>
+          <div class="paid-fallback" data-paid-fallback>
+            <p class="eyebrow">PAID FALLBACK</p>
+            <label class="field full-width">
+              <span><input type="checkbox" data-allow-paid-fallback> 무료 한도가 끝나면 유료 API로 계속 번역</span>
+              <small>
+                기본은 꺼져 있습니다. 켜 두면 DeepL API Free와 Azure F0가 모두 한도 초과·오류로 실패했을 때만
+                <code>local-server/.env</code>에 넣어 둔 DeepL API Pro / 유료 Azure Translator 키로 이어서 번역합니다.
+                유료 엔진으로 번역한 화면에는 번역 레이어와 팝업에 <b>유료</b> 표시가 붙습니다.
+              </small>
+            </label>
+            <p class="paid-usage" data-paid-usage>유료 API 사용량을 확인하는 중입니다.</p>
+          </div>
+
+          <div class="button-row">
+            <button class="secondary" type="button" data-health-check>연결 확인</button>
+            <button class="primary" type="button" data-save-settings>설정 저장</button>
+          </div>
+          <p class="feedback" data-settings-feedback></p>
+        </section>
+
+        <section class="panel glossary-panel" aria-labelledby="glossary-heading">
+          <div class="panel-heading glossary-title">
+            <div>
+              <p class="eyebrow">GLOSSARY OVERRIDE</p>
+              <h2 id="glossary-heading">고유명사 사전</h2>
+              <p>번역 전 표현을 보호하여, 지정한 번역이 반드시 표시되게 합니다.</p>
+            </div>
+            <button class="sample-button" type="button" data-use-example>예시 채우기</button>
+          </div>
+
+          <form class="glossary-form" data-glossary-form>
+            <input type="hidden" data-entry-id>
+            <label class="field">
+              <span>원문 표현</span>
+              <input type="text" data-entry-source maxlength="160" placeholder="SEOUL" required>
+            </label>
+            <span class="to-mark" aria-hidden="true">→</span>
+            <label class="field">
+              <span>지정 번역</span>
+              <input type="text" data-entry-target maxlength="160" placeholder="세울" required>
+            </label>
+            <label class="field compact">
+              <span>출발 언어</span>
+              <select data-entry-source-language></select>
+            </label>
+            <label class="field compact">
+              <span>도착 언어</span>
+              <select data-entry-target-language></select>
+            </label>
+            <label class="field compact">
+              <span>우선순위</span>
+              <input type="number" data-entry-priority min="-100" max="1000" value="100">
+            </label>
+            <div class="form-options">
+              <label><input type="checkbox" data-entry-case-sensitive checked> 대소문자 구분</label>
+              <label><input type="checkbox" data-entry-whole-word checked> 단어 전체 일치</label>
+              <label><input type="checkbox" data-entry-enabled checked> 사용</label>
+            </div>
+            <div class="form-actions">
+              <button type="button" class="link-button" data-reset-form>취소</button>
+              <button type="submit" class="primary" data-save-entry>사전에 저장</button>
+            </div>
+          </form>
+          <p class="feedback" data-glossary-feedback></p>
+
+          <div class="glossary-list-wrap">
+            <div class="list-heading"><span>등록된 규칙</span><span data-entry-count>0개</span></div>
+            <div class="glossary-list" data-glossary-list></div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script src="shared/defaults.js"></script>
+    <script src="shared/glossary.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

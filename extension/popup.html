@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>말풍선 번역 레이어</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="hero">
+        <div class="brand-mark" aria-hidden="true">가</div>
+        <div>
+          <p class="eyebrow">LOCAL WEBTOON TRANSLATOR</p>
+          <h1>말풍선 번역 레이어</h1>
+        </div>
+        <span class="connection-chip" data-server-status>서버 확인 중</span>
+      </header>
+
+      <section class="card language-card" aria-labelledby="language-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">TRANSLATION</p>
+            <h2 id="language-title">언어 설정</h2>
+          </div>
+          <label class="auto-toggle" title="스크롤이 멈추면 자동으로 다시 번역합니다.">
+            <input type="checkbox" data-auto-scan>
+            <span>자동</span>
+          </label>
+        </div>
+        <div class="language-row">
+          <label>
+            <span>출발 언어</span>
+            <select data-source-language></select>
+          </label>
+          <span class="language-arrow" aria-hidden="true">→</span>
+          <label>
+            <span>도착 언어</span>
+            <select data-target-language></select>
+          </label>
+        </div>
+        <label class="provider-row">
+          <span>번역 엔진</span>
+          <select data-translation-provider></select>
+          <small>API 키는 확장 프로그램이 아닌 내 컴퓨터의 로컬 서버에만 보관됩니다.</small>
+        </label>
+      </section>
+
+      <section class="readiness" data-readiness>
+        <span class="readiness-icon" aria-hidden="true">◌</span>
+        <p data-readiness-text>로컬 서버와 연결하면 화면을 번역할 수 있어요.</p>
+      </section>
+
+      <div class="actions">
+        <button class="primary-action" type="button" data-toggle>화면 번역 시작</button>
+        <button class="secondary-action" type="button" data-rescan disabled>지금 번역</button>
+      </div>
+      <button class="region-action" type="button" data-select-region disabled>▣ 번역 영역 지정</button>
+      <button class="copy-action" type="button" data-copy-original disabled>현재 화면 원문 복사</button>
+
+      <section class="translation-log card" aria-labelledby="translation-log-title">
+        <div class="section-heading translation-log-heading">
+          <div>
+            <p class="section-kicker">TRANSLATION LOG</p>
+            <h2 id="translation-log-title">이번 회차 번역 로그</h2>
+          </div>
+          <span class="log-count" data-log-count>0개</span>
+        </div>
+        <div class="log-actions">
+          <button type="button" data-refresh-log>새로고침</button>
+          <button type="button" data-copy-log disabled>전체 복사</button>
+          <button type="button" data-clear-log disabled>로그 비우기</button>
+        </div>
+        <p class="translation-log-empty" data-log-empty>이 회차에서 기록된 번역이 아직 없습니다.</p>
+        <ol class="translation-log-list" data-translation-log aria-live="polite"></ol>
+      </section>
+
+      <footer>
+        <button type="button" class="text-action" data-options>고유명사 사전 · 세부 설정</button>
+        <span class="privacy-note">OCR은 로컬 · API에는 텍스트만</span>
+      </footer>
+    </main>
+    <script src="shared/defaults.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

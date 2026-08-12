@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "말풍선 번역 레이어",
+  "version": "0.2.0",
+  "description": "웹툰 화면을 로컬 OCR과 DeepL·Azure 번역으로 원문 위에 표시합니다.",
+  "permissions": ["activeTab", "storage", "scripting", "clipboardWrite"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "말풍선 번역 레이어",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["content.css"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ],
+  "commands": {
+    "toggle-translation": {
+      "suggested_key": {
+        "default": "Alt+Shift+T"
+      },
+      "description": "현재 탭의 화면 번역을 켜거나 끕니다"
+    }
+  }
+}
