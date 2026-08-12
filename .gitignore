@@ -12,3 +12,6 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .DS_Store
+# Working notes for the coding agent, not part of the project.
+HANDOFF.md
+.agents/
