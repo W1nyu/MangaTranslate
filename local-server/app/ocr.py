@@ -40,20 +40,34 @@ PADDLE_RECOGNITION_MODELS = {
     "vi": "latin_PP-OCRv5_mobile_rec",
 }
 
-# The grouping heuristic follows top-to-bottom, left-to-right text flow. Keep
-# vertical/CJK scripts on PaddleOCR's original regions until they receive a
-# script-aware layout pass of their own.
+# The grouping heuristic follows top-to-bottom, left-to-right text flow.
 LTR_LINE_GROUPING_LANGUAGES = frozenset({"en", "es", "fr", "de", "pt", "ru", "vi"})
+# Japanese and Chinese pages may place one character (or short run) per OCR
+# box in a vertical column. Korean remains ungrouped here: vertical Korean is
+# uncommon and its square glyphs are too easy to mistake for separate labels.
+VERTICAL_CJK_GROUPING_LANGUAGES = frozenset({"ja", "zh"})
 
 # A visible webtoon viewport is often much larger than the mobile detector
 # needs. PaddleOCR 3's base pipeline otherwise retains its conservative
 # 64-pixel minimum-side setting, which can pass the whole high-DPI screenshot
-# through to the detector. The v5 mobile detector's normal limit is 960 pixels.
+# through to the detector. A 1280px ceiling keeps fine inverse-colour lettering
+# legible while still bounding CPU work on a high-DPI viewport.
 # Restrict only horizontal scripts: CJK readers retain their existing
 # full-resolution/orientation behavior because rotated and vertical text is
 # more common there.
 FAST_HORIZONTAL_OCR_LANGUAGES = LTR_LINE_GROUPING_LANGUAGES
-FAST_TEXT_DETECTION_LIMIT_SIDE_LEN = 960
+FAST_TEXT_DETECTION_LIMIT_SIDE_LEN = 1280
+# PaddleOCR's defaults (0.3 / 0.6) are tuned for high-contrast document scans.
+# Webtoon text often has outlines, gradients, glows, and reverse colours, so
+# retain weaker detector boxes and let the source-language, confidence, and
+# bubble-context stages reject unsuitable ones later in the pipeline.
+TEXT_DETECTION_THRESHOLD = 0.24
+TEXT_DETECTION_BOX_THRESHOLD = 0.48
+# A detector sometimes returns a tight word/line polygon in addition to the
+# already-grouped box for its complete speech bubble.  Suppress the smaller
+# target only when its text and geometry both prove that it is contained in the
+# larger one; close but distinct bubbles must remain independent.
+CONTAINED_REGION_OVERLAP_RATIO = 0.85
 
 # Script checks are intentionally conservative.  OCR can return names, sound
 # effects, or a one-letter answer, so those ambiguous fragments are kept.  The
@@ -240,6 +254,97 @@ def filter_regions_by_source_language(
         for region in regions
         if is_probably_source_language(str(region.get("text", "")), source_language)
     ]
+
+
+def _normalized_region_text(value: object) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
+
+
+def _text_contains_fragment(full_text: str, fragment: str) -> bool:
+    """Whether a grouped OCR result includes a whole detected fragment.
+
+    Latin fragments need word boundaries so ``he`` does not accidentally match
+    ``the``.  CJK text has no equivalent whitespace boundary, so its normalized
+    substring is deliberately retained as a valid containment signal.
+    """
+    if not full_text or not fragment:
+        return False
+    start = full_text.find(fragment)
+    if start < 0:
+        return False
+    if not any(character.isascii() and character.isalnum() for character in fragment):
+        return True
+    before = full_text[start - 1] if start else ""
+    end = start + len(fragment)
+    after = full_text[end] if end < len(full_text) else ""
+    return (not before or not before.isalnum()) and (not after or not after.isalnum())
+
+
+def _region_box(region: dict[str, float | str]) -> tuple[float, float, float, float] | None:
+    try:
+        left = float(region["x"])
+        top = float(region["y"])
+        width = float(region["width"])
+        height = float(region["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0 or not all(math.isfinite(value) for value in (left, top, width, height)):
+        return None
+    return left, top, width, height
+
+
+def _contained_area_ratio(inner: tuple[float, float, float, float], outer: tuple[float, float, float, float]) -> float:
+    inner_left, inner_top, inner_width, inner_height = inner
+    outer_left, outer_top, outer_width, outer_height = outer
+    overlap_width = max(0.0, min(inner_left + inner_width, outer_left + outer_width) - max(inner_left, outer_left))
+    overlap_height = max(0.0, min(inner_top + inner_height, outer_top + outer_height) - max(inner_top, outer_top))
+    return (overlap_width * overlap_height) / (inner_width * inner_height)
+
+
+def discard_contained_ocr_regions(regions: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
+    """Keep only the complete target when an OCR result duplicates part of it.
+
+    Grouping can leave both ``A complete sentence`` and a tight box containing
+    ``complete sentence``.  The latter must not be sent to the translation
+    provider or rendered as a second patch.  Text containment *and* at least
+    85% geometric containment are required, preventing repeated dialogue in a
+    nearby bubble from being removed merely because it uses the same phrase.
+    """
+    kept: list[dict[str, float | str]] = []
+    normalized = [_normalized_region_text(region.get("text", "")) for region in regions]
+    boxes = [_region_box(region) for region in regions]
+
+    for index, region in enumerate(regions):
+        inner_text = normalized[index]
+        inner_box = boxes[index]
+        if not inner_text or inner_box is None:
+            kept.append(region)
+            continue
+
+        inner_area = inner_box[2] * inner_box[3]
+        duplicate = False
+        for other_index, other in enumerate(regions):
+            if other_index == index:
+                continue
+            outer_text = normalized[other_index]
+            outer_box = boxes[other_index]
+            if not outer_text or outer_box is None:
+                continue
+            outer_area = outer_box[2] * outer_box[3]
+            if inner_text == outer_text:
+                # Equal text is only a duplicate when the competing box is at
+                # least as large. Identical dialogue in a different bubble does
+                # not meet the geometry requirement below.
+                if outer_area < inner_area:
+                    continue
+            elif len(outer_text) <= len(inner_text) or not _text_contains_fragment(outer_text, inner_text):
+                continue
+            if _contained_area_ratio(inner_box, outer_box) >= CONTAINED_REGION_OVERLAP_RATIO:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(region)
+    return kept
 
 
 def _result_payload(result: Any) -> dict[str, Any] | None:
@@ -431,10 +536,10 @@ def _stacked_line_score(previous: dict[str, float | str], current: dict[str, flo
     # Text lines in one English bubble normally have a much smaller separation
     # than their height. The 8px floor keeps small-font viewport captures usable.
     # Comic bubbles can use generous leading, especially around a short
-    # centered line.  The prior 1.1x limit split ordinary four-line dialogue
-    # into multiple translation targets.  This remains well below a separate
-    # bubble in the next paragraph (and horizontal alignment is still checked).
-    max_vertical_gap = max(8.0, 1.65 * line_height)
+    # centered line. A 1.9x limit keeps deliberately spaced dialogue together;
+    # horizontal alignment still prevents a nearby caption/bubble from being
+    # absorbed into the same translation target.
+    max_vertical_gap = max(8.0, 1.9 * line_height)
     allowed_overlap = 0.25 * min(previous_height, current_height)
     if vertical_gap < -allowed_overlap or vertical_gap > max_vertical_gap:
         return None
@@ -712,6 +817,94 @@ def group_ocr_regions(regions: list[dict[str, float | str]]) -> list[dict[str, f
     return grouped
 
 
+def group_vertical_cjk_regions(regions: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
+    """Merge tightly stacked Japanese/Chinese OCR boxes in one vertical column.
+
+    Horizontal CJK labels deliberately pass through unchanged. A candidate has
+    to be clearly taller than it is wide, align with the previous column box,
+    and be separated by only a small gap; this avoids joining two independent
+    bubbles that happen to be above/below one another.
+    """
+    vertical: list[dict[str, float | str | int]] = []
+    passthrough: list[dict[str, float | str]] = []
+    for original_index, region in enumerate(regions):
+        try:
+            x = float(region["x"])
+            y = float(region["y"])
+            width = float(region["width"])
+            height = float(region["height"])
+            confidence = float(region["confidence"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        text = "".join(str(region.get("text", "")).split())
+        if (
+            not text
+            or width <= 0
+            or height <= 0
+            or not all(math.isfinite(value) for value in (x, y, width, height, confidence))
+        ):
+            continue
+        line: dict[str, float | str | int] = {
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "text": text,
+            "confidence": confidence,
+            "original_index": original_index,
+        }
+        if height >= width * 1.15:
+            vertical.append(line)
+        else:
+            passthrough.append({key: value for key, value in line.items() if key != "original_index"})
+
+    vertical.sort(key=lambda line: (-float(line["x"]) - float(line["width"]) / 2, float(line["y"]), int(line["original_index"])))
+    columns: list[list[dict[str, float | str | int]]] = []
+    for line in vertical:
+        line_center = float(line["x"]) + float(line["width"]) / 2
+        matches: list[tuple[float, list[dict[str, float | str | int]]]] = []
+        for column in columns:
+            last = column[-1]
+            last_center = float(last["x"]) + float(last["width"]) / 2
+            center_delta = abs(line_center - last_center)
+            width_scale = max(float(line["width"]), float(last["width"]))
+            gap = float(line["y"]) - (float(last["y"]) + float(last["height"]))
+            if center_delta > max(6.0, width_scale * 0.65):
+                continue
+            if gap < -min(float(line["height"]), float(last["height"])) * 0.35:
+                continue
+            if gap > max(36.0, width_scale * 3.0, float(last["height"]) * 1.15):
+                continue
+            matches.append((center_delta + max(0.0, gap), column))
+        if matches:
+            _, column = min(matches, key=lambda match: match[0])
+            column.append(line)
+        else:
+            columns.append([line])
+
+    grouped = list(passthrough)
+    for column in columns:
+        members = sorted(column, key=lambda member: (float(member["y"]), int(member["original_index"])))
+        left = min(float(member["x"]) for member in members)
+        top = min(float(member["y"]) for member in members)
+        right = max(float(member["x"]) + float(member["width"]) for member in members)
+        bottom = max(float(member["y"]) + float(member["height"]) for member in members)
+        total_area = sum(float(member["width"]) * float(member["height"]) for member in members)
+        confidence = sum(
+            float(member["confidence"]) * float(member["width"]) * float(member["height"])
+            for member in members
+        ) / total_area
+        grouped.append({
+            "x": left,
+            "y": top,
+            "width": right - left,
+            "height": bottom - top,
+            "text": "".join(str(member["text"]) for member in members),
+            "confidence": confidence,
+        })
+    return sorted(grouped, key=lambda item: (float(item["y"]), float(item["x"])))
+
+
 class PaddleOcrEngine:
     """Lazy PaddleOCR 3 loader optimized for repeated visible-screen OCR."""
 
@@ -745,6 +938,8 @@ class PaddleOcrEngine:
                         "use_doc_orientation_classify": False,
                         "use_doc_unwarping": False,
                         "use_textline_orientation": source_language not in FAST_HORIZONTAL_OCR_LANGUAGES,
+                        "text_det_thresh": TEXT_DETECTION_THRESHOLD,
+                        "text_det_box_thresh": TEXT_DETECTION_BOX_THRESHOLD,
                     }
                     if source_language in FAST_HORIZONTAL_OCR_LANGUAGES:
                         reader_options.update(

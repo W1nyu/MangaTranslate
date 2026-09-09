@@ -21,6 +21,27 @@ test("a first capture creates one entry per region", () => {
   assert.deepEqual(result.entries.map((entry) => entry.text), ["one", "two"]);
 });
 
+test("a contained OCR subset does not create a second translation patch", () => {
+  const result = merge([], [
+    candidate({ documentRect: rect(100, 80, 260, 100), text: "I will not abandon you." }),
+    candidate({ documentRect: rect(122, 116, 190, 24), text: "not abandon you" })
+  ]);
+
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.added, 1);
+  assert.equal(result.entries[0].text, "I will not abandon you.");
+});
+
+test("a repeated phrase outside the complete bubble remains a separate target", () => {
+  const result = merge([], [
+    candidate({ documentRect: rect(100, 80, 260, 100), text: "I will not abandon you." }),
+    candidate({ documentRect: rect(440, 116, 190, 24), text: "not abandon you" })
+  ]);
+
+  assert.equal(result.entries.length, 2);
+  assert.deepEqual(result.entries.map((entry) => entry.text), ["I will not abandon you.", "not abandon you"]);
+});
+
 test("re-detecting the same bubble updates it instead of duplicating", () => {
   const first = merge([], [candidate({ documentRect: rect(0, 0, 100, 40), text: "hello" })]);
   // The next capture shifts the detected box slightly, as OCR normally does.

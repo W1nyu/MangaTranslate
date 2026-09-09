@@ -15,6 +15,7 @@ IMAGE_W, IMAGE_H = 600, 500
 ARTWORK = 90
 FILL = 245
 OUTLINE = 20
+DARK_FILL = 18
 
 
 def canvas(background: int = ARTWORK) -> np.ndarray:
@@ -42,6 +43,29 @@ def draw_text(image: np.ndarray, left: int, top: int, right: int, bottom: int) -
     """Dark glyph-like strokes, leaving fill visible between them."""
     for y in range(top, bottom, 6):
         image[y:y + 3, left:right:2] = 30
+
+
+def draw_light_text(image: np.ndarray, left: int, top: int, right: int, bottom: int) -> None:
+    """Light glyph-like strokes for reverse-colour speech/caption boxes."""
+    for y in range(top, bottom, 6):
+        image[y:y + 3, left:right:2] = 245
+
+
+def draw_dark_bubble(image: np.ndarray, left: int, top: int, right: int, bottom: int, fill: int = DARK_FILL) -> None:
+    """A dark fill with a light outline, clipped to the image."""
+    l, t = max(0, left), max(0, top)
+    r, b = min(image.shape[1], right), min(image.shape[0], bottom)
+    if r <= l or b <= t:
+        return
+    image[t:b, l:r] = fill
+    if left >= 0:
+        image[t:b, l:min(l + 3, r)] = FILL if left == l else fill
+    if right <= image.shape[1]:
+        image[t:b, max(l, r - 3):r] = FILL if right == r else fill
+    if top >= 0:
+        image[t:min(t + 3, b), l:r] = FILL if top == t else fill
+    if bottom <= image.shape[0]:
+        image[max(t, b - 3):b, l:r] = FILL if bottom == b else fill
 
 
 def region(left: int, top: int, right: int, bottom: int) -> dict[str, float]:
@@ -99,6 +123,29 @@ class BubbleAnalysisTests(unittest.TestCase):
         draw_text(image, 160, 150, 420, 250)
 
         self.assertEqual(analyze_bubble(image, region(160, 150, 420, 250)).status, "absent")
+
+    def test_white_text_in_a_dark_bubble_is_complete(self) -> None:
+        image = canvas()
+        draw_dark_bubble(image, 120, 100, 460, 300)
+        draw_light_text(image, 160, 150, 420, 250)
+
+        self.assertEqual(analyze_bubble(image, region(160, 150, 420, 250)).status, "complete")
+
+    def test_dark_caption_running_to_the_capture_edge_is_deferred(self) -> None:
+        image = canvas(background=DARK_FILL)
+        draw_light_text(image, 160, 150, 420, 250)
+
+        analysis = analyze_bubble(image, region(160, 150, 420, 250))
+        self.assertEqual(analysis.status, "clipped")
+        self.assertIn("top", analysis.edges)
+
+    def test_mid_tone_caption_box_with_dark_text_is_complete(self) -> None:
+        image = canvas(background=40)
+        draw_bubble(image, 120, 100, 460, 300)
+        image[103:297, 123:457] = 130
+        draw_text(image, 160, 150, 420, 250)
+
+        self.assertEqual(analyze_bubble(image, region(160, 150, 420, 250)).status, "complete")
 
     def test_a_narrow_caption_box_is_still_complete(self) -> None:
         image = canvas()

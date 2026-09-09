@@ -1,0 +1,14 @@
+{
+  "description": "Sanitized geometry captured from a browser reader viewport: two real bubble targets plus tight duplicate OCR fragments. The text is synthetic so this fixture carries no comic dialogue.",
+  "sourceLanguage": "en",
+  "regions": [
+    {"text": "Please wait for me.", "x": 188, "y": 204, "width": 268, "height": 82, "confidence": 0.97},
+    {"text": "wait for me", "x": 220, "y": 236, "width": 166, "height": 24, "confidence": 0.91},
+    {"text": "I will be right back.", "x": 664, "y": 372, "width": 286, "height": 88, "confidence": 0.96},
+    {"text": "right back", "x": 710, "y": 407, "width": 148, "height": 23, "confidence": 0.9}
+  ],
+  "expectedTexts": [
+    "Please wait for me.",
+    "I will be right back."
+  ]
+}

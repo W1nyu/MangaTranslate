@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { regions } from "./helpers.mjs";
 
-const { incrementalBand, addCoverage, uncoveredSpan } = regions;
+const { incrementalBand, addCoverage, uncoveredSpan, coverageRangeForRect, expandCaptureRegion, autoCaptureRegionFromContentRects } = regions;
 
 const VIEWPORT_HEIGHT = 1_000;
 
@@ -36,6 +36,49 @@ test("addCoverage merges touching and overlapping ranges", () => {
 test("addCoverage ignores degenerate ranges", () => {
   assert.deepEqual(addCoverage([], { top: 100, bottom: 100 }), []);
   assert.deepEqual(addCoverage([{ top: 0, bottom: 50 }], null), [{ top: 0, bottom: 50 }]);
+});
+
+test("coverage follows the rectangle that was actually captured", () => {
+  assert.deepEqual(
+    coverageRangeForRect({ left: 12, top: 1_300, width: 640, height: 480 }),
+    { top: 1_300, bottom: 1_780 }
+  );
+  assert.equal(coverageRangeForRect({ left: 0, top: 0, width: 0, height: 10 }), null);
+});
+
+test("a selected capture keeps its target but includes a bounded OCR safety halo", () => {
+  const rounded = (region) => Object.fromEntries(
+    Object.entries(region).map(([key, value]) => [key, Number(value.toFixed(6))])
+  );
+  assert.deepEqual(
+    rounded(expandCaptureRegion({ x: 0.2, y: 0.3, width: 0.4, height: 0.2 }, { width: 1_000, height: 800 })),
+    { x: 0.12, y: 0.2, width: 0.56, height: 0.4 }
+  );
+  assert.deepEqual(
+    rounded(expandCaptureRegion({ x: 0.02, y: 0.01, width: 0.1, height: 0.1 }, { width: 300, height: 500 })),
+    { x: 0, y: 0, width: 0.24, height: 0.23 },
+    "the halo is clipped to the viewport rather than escaping it"
+  );
+  assert.equal(expandCaptureRegion(null, { width: 1_000, height: 800 }), null, "full viewport needs no extra crop");
+});
+
+test("automatic reader-area detection chooses the large comic column, not viewer controls", () => {
+  const region = autoCaptureRegionFromContentRects([
+    { left: 0, top: 0, width: 1_440, height: 64 }, // reader header
+    { left: 14, top: 92, width: 72, height: 72 }, // avatar/menu artwork
+    { left: 292, top: 78, width: 856, height: 760 }, // current webtoon panel
+    { left: 1_188, top: 178, width: 180, height: 120 } // recommendation card
+  ], { width: 1_440, height: 900 });
+
+  assert.ok(region);
+  assert.ok(Math.abs(region.x - 292 / 1_440) < 1e-12);
+  assert.ok(Math.abs(region.y - 78 / 900) < 1e-12);
+  assert.ok(Math.abs(region.width - 856 / 1_440) < 1e-12);
+  assert.ok(Math.abs(region.height - 760 / 900) < 1e-12);
+});
+
+test("automatic reader-area detection safely falls back when no artwork is visible", () => {
+  assert.equal(autoCaptureRegionFromContentRects([{ left: 4, top: 4, width: 60, height: 60 }], { width: 900, height: 700 }), null);
 });
 
 test("addCoverage keeps the ranges nearest what is being read", () => {

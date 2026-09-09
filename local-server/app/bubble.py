@@ -7,8 +7,9 @@ Two problems this solves for the reader:
 2. Scrolling puts half a bubble on screen. Reading that half yields a truncated
    sentence, and translating it produces confident nonsense.
 
-Both are decided from the captured pixels: a speech bubble is a light fill
-enclosing the text. If that fill runs off the edge of the captured image, the
+Both are decided from the captured pixels: a speech bubble is usually a light
+fill enclosing dark text, but webtoons also use black/dark caption boxes with
+white lettering. If that fill runs off the edge of the captured image, the
 bubble is cut and the region is left for a later capture that contains all of
 it. The checks are deliberately conservative - an inconclusive region is kept,
 because dropping real dialogue is worse than tolerating an occasional stray
@@ -25,6 +26,13 @@ import numpy as np
 # A bubble fill is far lighter than inked artwork. Text sitting on anything
 # darker than this is treated as lettering on the drawing rather than dialogue.
 LIGHT_FILL_THRESHOLD = 165
+# A black caption box with white lettering used to be discarded as artwork
+# because the light-fill-only rule treated its dark background as "absent".
+# Dark fills are valid when the OCR box itself contains enough bright glyph
+# pixels to establish the inverse text/background contrast.
+DARK_FILL_THRESHOLD = 80
+MIN_INK_CONTRAST = 64
+MIN_INK_RATIO = 0.012
 # How far a pixel may drift from the sampled fill and still count as bubble.
 # Generous enough for paper texture, screentone and JPEG ringing.
 FILL_TOLERANCE = 46
@@ -81,15 +89,39 @@ def _region_box(region: Any, width: int, height: int) -> tuple[int, int, int, in
 
 
 def _fill_value(gray: np.ndarray, box: tuple[int, int, int, int]) -> float:
-    """Estimate the bubble fill brightness from inside the text box.
+    """Estimate the dominant fill brightness from inside the text box.
 
-    The upper quartile is used rather than the mean because the glyphs are dark
-    and the fill between them is what the bubble actually looks like. Sampling a
-    ring outside the box instead would be fooled by a loose grouping box that
+    OCR boxes contain both glyphs and their background.  Taking only the upper
+    quartile works for black text on white, but mistakes dense white lettering
+    for a white background.  The most populated 16-level luminance band instead
+    selects the local background for both normal and inverse-colour captions.
+    Sampling a ring outside the box would be fooled by a loose grouping box that
     already reaches the bubble outline.
     """
     left, top, right, bottom = box
-    return float(np.percentile(gray[top:bottom, left:right], 75))
+    sample = gray[top:bottom, left:right]
+    if not sample.size:
+        return 0.0
+    bands = sample.astype(np.uint8).reshape(-1) // 16
+    dominant_band = int(np.argmax(np.bincount(bands, minlength=16)))
+    return float(np.median(sample[(sample // 16) == dominant_band]))
+
+
+def _ink_ratios(gray: np.ndarray, box: tuple[int, int, int, int], fill_value: float) -> tuple[float, float]:
+    """How much darker/lighter text-like ink is inside a candidate fill.
+
+    OCR boxes are tight around glyphs, making them a more reliable contrast
+    sample than the illustrated background outside them.  The low threshold
+    accepts antialiased or coloured lettering without promoting a few JPEG
+    speckles into text.
+    """
+    left, top, right, bottom = box
+    sample = gray[top:bottom, left:right].astype(np.int16)
+    if not sample.size:
+        return 0.0, 0.0
+    dark = np.count_nonzero(sample <= fill_value - MIN_INK_CONTRAST) / sample.size
+    light = np.count_nonzero(sample >= fill_value + MIN_INK_CONTRAST) / sample.size
+    return float(dark), float(light)
 
 
 def _outward_run(ratios: np.ndarray) -> int:
@@ -175,9 +207,23 @@ def analyze_bubble(gray: np.ndarray, region: Any) -> BubbleAnalysis:
         return BubbleAnalysis("clipped", touching)
 
     fill_value = _fill_value(gray, box)
-    if fill_value < LIGHT_FILL_THRESHOLD:
-        # Dark surroundings: lettering drawn onto the artwork, not dialogue in a
-        # bubble.
+    dark_ink_ratio, light_ink_ratio = _ink_ratios(gray, box, fill_value)
+    if fill_value >= LIGHT_FILL_THRESHOLD:
+        fill_kind = "light"
+    elif fill_value <= DARK_FILL_THRESHOLD:
+        if light_ink_ratio < MIN_INK_RATIO:
+            # Dark surroundings with no bright glyph contrast remain artwork.
+            return BubbleAnalysis("absent")
+        fill_kind = "dark"
+    elif dark_ink_ratio >= MIN_INK_RATIO:
+        # Coloured/mid-tone caption boxes commonly have dark lettering. Keep
+        # them when an enclosing border confirms that this is a bounded box.
+        fill_kind = "mid"
+    elif light_ink_ratio >= MIN_INK_RATIO:
+        # A saturated dark colour can be brighter than black in luminance yet
+        # still contain white lettering.
+        fill_kind = "dark"
+    else:
         return BubbleAnalysis("absent")
 
     fill = np.abs(gray.astype(np.int16) - fill_value) <= FILL_TOLERANCE
@@ -185,6 +231,10 @@ def analyze_bubble(gray: np.ndarray, region: Any) -> BubbleAnalysis:
     outcome = _expand(fill, box, budget)
 
     edges = tuple(edge for edge in EDGES if outcome[edge] == "border")
+    if fill_kind == "mid" and not any(value == "blocked" for value in outcome.values()):
+        # A uniform medium-toned piece of artwork has no caption outline. Do
+        # not accept it solely because it happened to contain dark pixels.
+        return BubbleAnalysis("absent")
     if edges:
         return BubbleAnalysis("clipped", edges)
     return BubbleAnalysis("complete")

@@ -19,6 +19,10 @@
   const DEFAULT_IOU_THRESHOLD = 0.45;
   const DEFAULT_TEXT_PROXIMITY_RATIO = 0.1;
   const DEFAULT_MAX_ENTRIES = 600;
+  // A tight OCR fragment is only a duplicate when almost all of its box sits
+  // inside the complete bubble's box. Text alone is not enough: dialogue such
+  // as "No" can naturally recur in adjacent bubbles.
+  const CONTAINED_REGION_OVERLAP_RATIO = 0.85;
   // How many times a capture may cover a stored bubble without finding it again
   // before it is treated as gone. OCR occasionally misses a bubble it read a
   // moment ago, so one miss is not enough to remove a translation.
@@ -33,6 +37,10 @@
   // Past this fraction of the scanned region a strip is no cheaper than simply
   // rescanning the viewport, and a full scan resynchronizes any drift.
   const DEFAULT_MAX_BAND_RATIO = 0.72;
+  // A selected crop is a reader's target area, not a promise that every
+  // bubble outline fits exactly inside it. OCR a small halo around it so text
+  // close to the selection edge can still be classified as a whole bubble.
+  const DEFAULT_SELECTION_CAPTURE_PADDING_PX = 80;
   // Bounds how many separate read ranges are remembered for one episode.
   const MAX_COVERAGE_RANGES = 24;
 
@@ -98,6 +106,67 @@
     return Math.hypot(dx, dy);
   }
 
+  function clippedViewportRect(value, viewport) {
+    const width = Number(viewport?.width);
+    const height = Number(viewport?.height);
+    const rect = finiteRect({
+      left: value?.left ?? value?.x,
+      top: value?.top ?? value?.y,
+      width: value?.width,
+      height: value?.height
+    });
+    if (!rect || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+    const left = Math.max(0, rect.left);
+    const top = Math.max(0, rect.top);
+    const right = Math.min(width, rect.left + rect.width);
+    const bottom = Math.min(height, rect.top + rect.height);
+    return right > left && bottom > top ? { left, top, width: right - left, height: bottom - top } : null;
+  }
+
+  // Find the dominant artwork column in a visible reader. The content script
+  // supplies only img/canvas rectangles, keeping this deterministic and easy
+  // to regression-test without a browser DOM. Small logos, avatars, and reader
+  // buttons cannot qualify; panels sharing the main image column are unioned.
+  function autoCaptureRegionFromContentRects(rects, viewport) {
+    const viewportWidth = Number(viewport?.width);
+    const viewportHeight = Number(viewport?.height);
+    if (!Number.isFinite(viewportWidth) || !Number.isFinite(viewportHeight) || viewportWidth <= 0 || viewportHeight <= 0) {
+      return null;
+    }
+
+    const minimumWidth = Math.max(120, viewportWidth * 0.18);
+    const minimumHeight = Math.max(120, viewportHeight * 0.18);
+    const candidates = (Array.isArray(rects) ? rects : [])
+      .map((rect) => clippedViewportRect(rect, viewport))
+      .filter((rect) => rect && rect.width >= minimumWidth && rect.height >= minimumHeight);
+    if (!candidates.length) return null;
+
+    const dominant = [...candidates].sort((a, b) => rectArea(b) - rectArea(a) || b.width - a.width)[0];
+    const dominantCenter = dominant.left + dominant.width / 2;
+    const column = candidates.filter((rect) => {
+      const center = rect.left + rect.width / 2;
+      const overlap = rectIntersectionArea(
+        { left: dominant.left, top: 0, width: dominant.width, height: viewportHeight },
+        { left: rect.left, top: 0, width: rect.width, height: viewportHeight }
+      );
+      return (
+        Math.abs(center - dominantCenter) <= Math.max(96, dominant.width * 0.45)
+        || overlap >= Math.min(dominant.width, rect.width) * viewportHeight * 0.55
+      );
+    });
+    const left = Math.min(...column.map((rect) => rect.left));
+    const top = Math.min(...column.map((rect) => rect.top));
+    const right = Math.max(...column.map((rect) => rect.left + rect.width));
+    const bottom = Math.max(...column.map((rect) => rect.top + rect.height));
+    const region = normalizedCaptureRegion({
+      x: left / viewportWidth,
+      y: top / viewportHeight,
+      width: (right - left) / viewportWidth,
+      height: (bottom - top) / viewportHeight
+    });
+    return region && region.width * region.height >= 0.08 ? region : null;
+  }
+
   // OCR re-reads the same lettering slightly differently between captures.
   // Compare on a form that ignores width/compatibility variants, casing, and
   // the line breaks that grouping introduces.
@@ -107,6 +176,47 @@
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();
+  }
+
+  function textContainsWholeFragment(fullText, fragment) {
+    if (!fullText || !fragment) return false;
+    const start = fullText.indexOf(fragment);
+    if (start < 0) return false;
+    // Do not turn a short Latin OCR fragment such as "he" into a duplicate of
+    // an unrelated word such as "the". CJK text has no word spaces, so its
+    // normalized substring remains a useful containment signal.
+    if (!/[a-z0-9]/i.test(fragment)) return true;
+    const before = start > 0 ? fullText[start - 1] : "";
+    const afterIndex = start + fragment.length;
+    const after = afterIndex < fullText.length ? fullText[afterIndex] : "";
+    return !/[a-z0-9]/i.test(before) && !/[a-z0-9]/i.test(after);
+  }
+
+  function discardContainedCandidates(candidates) {
+    const values = (Array.isArray(candidates) ? candidates : []).filter(Boolean);
+    return values.filter((candidate, index) => {
+      const candidateRect = finiteRect(candidate?.documentRect);
+      const candidateText = candidate?.normalizedText ?? normalizeRegionText(candidate?.text);
+      if (!candidateRect || !candidateText) return true;
+      const candidateArea = rectArea(candidateRect);
+
+      return !values.some((outer, outerIndex) => {
+        if (outerIndex === index) return false;
+        const outerRect = finiteRect(outer?.documentRect);
+        const outerText = outer?.normalizedText ?? normalizeRegionText(outer?.text);
+        if (!outerRect || !outerText) return false;
+
+        const outerArea = rectArea(outerRect);
+        if (candidateText === outerText) {
+          // Retain one deterministic winner for identical overlapping OCR boxes.
+          if (outerArea < candidateArea || (outerArea === candidateArea && outerIndex > index)) return false;
+        } else if (outerText.length <= candidateText.length || !textContainsWholeFragment(outerText, candidateText)) {
+          return false;
+        }
+
+        return rectIntersectionArea(candidateRect, outerRect) >= candidateArea * CONTAINED_REGION_OVERLAP_RATIO;
+      });
+    });
   }
 
   function anchorRelRect(anchor) {
@@ -276,7 +386,11 @@
     let added = 0;
     let updated = 0;
 
-    for (const candidate of Array.isArray(incoming) ? incoming : []) {
+    // The local server normally removes contained OCR fragments before they
+    // reach the browser. Keep this second guard at the rendering boundary so a
+    // stale server or a future OCR provider cannot create two patches for A and
+    // its contained subset B in the same capture.
+    for (const candidate of discardContainedCandidates(incoming)) {
       if (!candidate) continue;
       const rect = finiteRect(candidate.documentRect);
       if (!rect) continue;
@@ -341,6 +455,23 @@
     return { x: left, y: top, width: right - left, height: bottom - top };
   }
 
+  function expandCaptureRegion(value, viewport, paddingPx = DEFAULT_SELECTION_CAPTURE_PADDING_PX) {
+    const region = normalizedCaptureRegion(value);
+    if (!region) return null;
+    const width = Math.max(1, Number(viewport?.width) || 0);
+    const height = Math.max(1, Number(viewport?.height) || 0);
+    const padding = Math.max(0, Number(paddingPx) || 0);
+    // Do not let a small phone viewport turn a modest safety margin into the
+    // whole screen. The fixed-pixel value stays useful at normal desktop size.
+    const horizontal = Math.min(0.12, padding / width);
+    const vertical = Math.min(0.12, padding / height);
+    const left = Math.max(0, region.x - horizontal);
+    const top = Math.max(0, region.y - vertical);
+    const right = Math.min(1, region.x + region.width + horizontal);
+    const bottom = Math.min(1, region.y + region.height + vertical);
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+
   // ---------------------------------------------------------------------------
   // Coverage: which document ranges have already been read.
   //
@@ -354,6 +485,14 @@
     const bottom = Number(value?.bottom);
     if (![top, bottom].every(isFiniteNumber) || bottom <= top) return null;
     return { top, bottom };
+  }
+
+  // A capture plan is calculated before the overlay is hidden for its
+  // screenshot. If the reader scrolls in those two animation frames, coverage
+  // must follow the rectangle actually captured, not the earlier plan.
+  function coverageRangeForRect(value) {
+    const rect = finiteRect(value);
+    return rect ? { top: rect.top, bottom: rect.top + rect.height } : null;
   }
 
   function addCoverage(ranges, band, options = {}) {
@@ -517,12 +656,15 @@
     DEFAULT_BAND_OVERLAP_PX,
     DEFAULT_MIN_BAND_PX,
     DEFAULT_MAX_BAND_RATIO,
+    DEFAULT_SELECTION_CAPTURE_PADDING_PX,
     MAX_COVERAGE_RANGES,
     finiteRect,
     rectIoU,
     rectsIntersect,
     rectCenterDistance,
+    autoCaptureRegionFromContentRects,
     normalizeRegionText,
+    discardContainedCandidates,
     anchorRelRect,
     resolveAnchorRect,
     documentAnchor,
@@ -530,6 +672,8 @@
     findMatchingEntry,
     mergeRegions,
     normalizedCaptureRegion,
+    expandCaptureRegion,
+    coverageRangeForRect,
     addCoverage,
     uncoveredSpan,
     trimBandForClipped,

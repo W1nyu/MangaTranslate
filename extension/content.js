@@ -10,9 +10,14 @@
     documentAnchor,
     elementAnchor,
     rectsIntersect,
+    rectCenterDistance,
+    normalizeRegionText,
+    autoCaptureRegionFromContentRects,
     incrementalBand,
     addCoverage,
     trimBandForClipped,
+    coverageRangeForRect,
+    expandCaptureRegion,
     normalizedCaptureRegion: normalizeCaptureRegion
   } = globalThis.WebtoonRegions;
 
@@ -43,6 +48,17 @@
       height: Math.max(1, Number(window.innerHeight) || 1),
       devicePixelRatio: Number(window.devicePixelRatio) || 1
     };
+  }
+
+  function autoComicCaptureRegion(frame) {
+    const contentRects = [];
+    for (const element of document.querySelectorAll("img, canvas")) {
+      // Unloaded images and zero-sized tracking canvases are not artwork.
+      if (element instanceof HTMLImageElement && element.naturalWidth <= 0) continue;
+      const rect = element.getBoundingClientRect();
+      contentRects.push({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+    }
+    return autoCaptureRegionFromContentRects(contentRects, frame);
   }
 
   function toViewportRect(documentRect, frame) {
@@ -269,6 +285,12 @@
     clear() {
       this.entries = [];
     }
+
+    remove(id) {
+      const index = this.entries.findIndex((entry) => entry?.id === id);
+      if (index < 0) return null;
+      return this.entries.splice(index, 1)[0] || null;
+    }
   }
 
   class TranslationOverlay {
@@ -289,6 +311,7 @@
             </div>
             <div class="toolbar-actions">
               <button type="button" data-action="refresh" title="현재 화면 다시 번역">↻</button>
+              <button type="button" data-action="exclude" title="오인식 번역 제외: 누른 뒤 번역 패치를 클릭" aria-pressed="false">제외</button>
               <button type="button" data-action="select-region" title="번역할 화면 영역 지정" aria-pressed="false">영역</button>
               <button type="button" data-action="original" title="번역을 숨기고 원문 보기" aria-pressed="false">원문</button>
               <button type="button" data-action="copy-original" title="현재 화면의 OCR 원문 전체 복사">복사</button>
@@ -318,6 +341,7 @@
       this.statusText = this.shadow.querySelector("[data-status-text]");
       this.statusDot = this.shadow.querySelector("[data-status-dot]");
       this.regionButton = this.shadow.querySelector("[data-action=select-region]");
+      this.excludeButton = this.shadow.querySelector("[data-action=exclude]");
       this.originalButton = this.shadow.querySelector("[data-action=original]");
       this.reloadRequired = this.shadow.querySelector("[data-reload-required]");
       this.selectionLayer = this.shadow.querySelector("[data-region-selection]");
@@ -331,8 +355,10 @@
       // viewport is removed from here so no stale translation stays on screen.
       this.nodes = new Map();
       this.hoveredId = null;
+      this.exclusionMode = false;
 
       this.shadow.querySelector("[data-action=refresh]").addEventListener("click", () => controller.scheduleScan("manual", true));
+      this.excludeButton.addEventListener("click", () => this.setExclusionMode(!this.exclusionMode));
       this.regionButton.addEventListener("click", () => controller.startRegionSelection());
       this.originalButton.addEventListener("click", () => controller.toggleOriginal());
       this.shadow.querySelector("[data-action=copy-original]").addEventListener("click", () => {
@@ -352,6 +378,13 @@
         if (event.key === "Escape") {
           event.preventDefault();
           controller.cancelRegionSelection();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && this.exclusionMode) {
+          event.preventDefault();
+          this.setExclusionMode(false);
+          this.setStatus("idle", "오인식 제외를 취소했습니다.");
         }
       });
     }
@@ -557,9 +590,25 @@
       this.regions.replaceChildren();
     }
 
+    setExclusionMode(enabled) {
+      this.exclusionMode = Boolean(enabled);
+      this.regions.classList.toggle("exclude-mode", this.exclusionMode);
+      this.excludeButton.classList.toggle("active", this.exclusionMode);
+      this.excludeButton.setAttribute("aria-pressed", String(this.exclusionMode));
+      this.excludeButton.title = this.exclusionMode
+        ? "제외할 번역 패치를 클릭하세요 (Esc로 취소)"
+        : "오인식 번역 제외: 누른 뒤 번역 패치를 클릭";
+      if (this.exclusionMode) {
+        this.setStatus("idle", "제외할 번역 패치를 클릭하세요", "오인식 패치 한 개를 이번 회차에서 숨깁니다. 누락된 영역은 ↻로 다시 읽을 수 있어요.");
+      }
+    }
+
     createRegionNode() {
       const box = document.createElement("article");
       box.className = "translation-region";
+      box.addEventListener("click", () => {
+        if (this.exclusionMode) this.controller.excludeTranslation(box.dataset.entryId);
+      });
       const copy = document.createElement("span");
       copy.className = "translation-copy";
       box.append(copy);
@@ -647,6 +696,7 @@
         box.dataset.hitTop = String(rect.top);
         box.dataset.hitRight = String(rect.left + rect.width);
         box.dataset.hitBottom = String(rect.top + rect.height);
+        box.dataset.entryId = entry.id;
         box.classList.toggle("show-original", showOriginal);
         box.setAttribute(
           "aria-label",
@@ -782,6 +832,9 @@
       // extension never falls through to an accidental full-screen scan before
       // the reader has made a choice.
       this.captureRegionSelected = false;
+      // Reader corrections are scoped to this tab and episode. They suppress
+      // the same OCR text only at the same visual location on later rescans.
+      this.suppressedCandidates = [];
       this.contextInvalidated = false;
       this.overlay = new TranslationOverlay(this);
       this.onViewportChange = this.onViewportChange.bind(this);
@@ -804,6 +857,7 @@
       this.activeCaptureToken = null;
       this.captureRegion = null;
       this.captureRegionSelected = false;
+      this.suppressedCandidates = [];
       clearTimeout(this.timer);
       clearTimeout(this.memorySaveTimer);
       this.timer = null;
@@ -995,12 +1049,12 @@
       this.consecutiveBandScans = 0;
     }
 
-    coverageContextKey(frame) {
+    coverageContextKey(frame, captureRegion = this.captureRegion) {
       return [
         frame.width,
         frame.height,
         frame.devicePixelRatio,
-        JSON.stringify(this.captureRegion)
+        JSON.stringify(captureRegion)
       ].join("|");
     }
 
@@ -1142,6 +1196,34 @@
       this.scheduleRegionMemorySave();
     }
 
+    isSuppressedCandidate(candidate) {
+      const normalizedText = normalizeRegionText(candidate?.text);
+      const documentRect = candidate?.documentRect;
+      if (!normalizedText || !documentRect) return false;
+      return this.suppressedCandidates.some((suppressed) => (
+        suppressed.normalizedText === normalizedText
+        && rectCenterDistance(suppressed.documentRect, documentRect) <= Math.max(48, window.innerHeight * 0.08)
+      ));
+    }
+
+    excludeTranslation(entryId) {
+      const entry = this.store.remove(entryId);
+      this.overlay.setExclusionMode(false);
+      if (!entry) return false;
+      const normalizedText = normalizeRegionText(entry.text);
+      if (normalizedText && entry.documentRect) {
+        this.suppressedCandidates.push({ normalizedText, documentRect: entry.documentRect });
+      }
+      this.syncOverlays();
+      this.scheduleRegionMemorySave();
+      this.overlay.setStatus(
+        "ready",
+        "오인식 번역을 제외했습니다",
+        "같은 위치·원문의 번역은 이번 회차에서 다시 표시하지 않습니다. 누락된 영역은 ↻를 눌러 다시 읽을 수 있어요."
+      );
+      return true;
+    }
+
     getOriginalText() {
       const visible = this.overlay.visibleEntryIds();
       const text = this.store.entries
@@ -1228,6 +1310,33 @@
       };
     }
 
+    selectedDocumentRect(frame, captureRegion = this.captureRegion) {
+      const selected = normalizeCaptureRegion(captureRegion);
+      if (!selected) return null;
+      return {
+        left: selected.x * frame.width + frame.scrollX,
+        top: selected.y * frame.height + frame.scrollY,
+        width: selected.width * frame.width,
+        height: selected.height * frame.height
+      };
+    }
+
+    // The OCR crop includes a safety halo around an explicit selection. Keep
+    // that halo for bubble context, while only mounting patches whose centre is
+    // inside the area the reader actually chose.
+    isInSelectedRegion(documentRect, frame, captureRegion = this.captureRegion) {
+      const selected = this.selectedDocumentRect(frame, captureRegion);
+      if (!selected) return true;
+      const centerX = documentRect.left + documentRect.width / 2;
+      const centerY = documentRect.top + documentRect.height / 2;
+      return (
+        centerX >= selected.left
+        && centerX <= selected.left + selected.width
+        && centerY >= selected.top
+        && centerY <= selected.top + selected.height
+      );
+    }
+
     // Map a rectangle from cropped-image pixels into document coordinates.
     documentRectFromImage(rect, payload, frame) {
       const imageWidth = Number(payload.imageWidth) || 1;
@@ -1274,11 +1383,17 @@
         // Work out how little of the page actually needs reading before paying
         // for a screenshot at all.
         const plannedFrame = getViewportFrame();
-        const contextKey = this.coverageContextKey(plannedFrame);
+        // Explicit reader selection wins. Otherwise, prefer the dominant comic
+        // image/canvas column so a reader header or navigation never reaches OCR.
+        const automaticCaptureRegion = this.captureRegion || (scanSettings?.autoDetectComicRegion !== false
+          ? autoComicCaptureRegion(plannedFrame)
+          : null);
+        const targetCaptureRegion = this.captureRegion || automaticCaptureRegion;
+        const contextKey = this.coverageContextKey(plannedFrame, targetCaptureRegion);
         const plan = incrementalBand({
           coverage: this.coverage,
           viewport: { pageTop: plannedFrame.scrollY, height: plannedFrame.height },
-          captureRegion: this.captureRegion,
+          captureRegion: targetCaptureRegion,
           sameContext: contextKey === this.coverageContext && this.consecutiveBandScans < MAX_CONSECUTIVE_BAND_SCANS
         });
 
@@ -1311,9 +1426,14 @@
           // page has been read yet.
           this.invalidateCoverage();
           this.overlay.clearRegions();
+          this.suppressedCandidates = [];
         }
 
         const requestedAt = performance.now();
+        // A tight selection used to crop the bubble outline at its edge, making
+        // the complete-bubble guard defer it forever. Include context around
+        // the selected strip, then filter rendered regions back to the target.
+        const ocrCaptureRegion = expandCaptureRegion(plan.captureRegion, frame);
         const response = await chrome.runtime.sendMessage({
           type: "TRANSLATE_VISIBLE_FRAME",
           settings: this.settings,
@@ -1321,7 +1441,7 @@
           cacheScope,
           // Either the reader's whole selection, or just the strip that scrolled
           // into view since the last read.
-          captureRegion: plan.captureRegion,
+          captureRegion: ocrCaptureRegion,
           // The service worker compares screenshot pixels with this CSS
           // viewport size before downscaling a high-DPI capture.  It keeps
           // enough pixels for small lettering, while leaving overlay
@@ -1362,7 +1482,14 @@
         const candidates = [];
         for (const region of response.payload?.regions || []) {
           const candidate = this.regionCandidate(region, response.payload, frame, currentFrame, scanSettings);
-          if (candidate && (candidate.text || candidate.translation)) candidates.push(candidate);
+          if (
+            candidate
+            && this.isInSelectedRegion(candidate.documentRect, frame, targetCaptureRegion)
+            && !this.isSuppressedCandidate(candidate)
+            && (candidate.text || candidate.translation)
+          ) {
+            candidates.push(candidate);
+          }
         }
 
         // A bubble the server refused to translate because the capture cut it in
@@ -1374,10 +1501,13 @@
           if (rect) clipped.push({ ...rect, edges: region.edges });
         }
 
-        const merged = this.store.merge(candidates, this.capturedDocumentRect(response.payload, frame));
+        const capturedRect = this.capturedDocumentRect(response.payload, frame);
+        const merged = this.store.merge(candidates, capturedRect);
         this.documentAnchorsStale = false;
         // Only page the server actually read, and read whole, may be claimed.
-        const readBand = trimBandForClipped(plan.band, clipped);
+        // The planned band can be stale if a scroll happened while hiding old
+        // patches for the screenshot, so derive coverage from the returned crop.
+        const readBand = trimBandForClipped(coverageRangeForRect(capturedRect), clipped);
         this.coverage = readBand ? addCoverage(this.coverage, readBand) : this.coverage;
         this.coverageContext = contextKey;
         this.consecutiveBandScans = plan.mode === "band" ? this.consecutiveBandScans + 1 : 0;

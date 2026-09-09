@@ -71,6 +71,7 @@ h2 { font-size: 15px; }
 
 .connection-chip.ready { border-color: #b9dfd1; background: #effaf5; color: #267759; }
 .connection-chip.error { border-color: #f0c6c1; background: #fff4f2; color: #a14943; }
+.connection-chip.warn { border-color: #ead39e; background: #fff8e8; color: #956b27; }
 
 .card {
   padding: 15px;
@@ -158,6 +159,7 @@ select:focus { border-color: #8260a0; box-shadow: 0 0 0 3px rgba(130, 96, 160, 0
 
 .readiness.ready { background: #eef8f3; color: #3b6d59; }
 .readiness.error { background: #fff1ef; color: #95514b; }
+.readiness.warn { background: #fff8e8; color: #866527; }
 .readiness-icon { font-size: 16px; line-height: 1; }
 .readiness p { margin: 0; font-size: 11px; line-height: 1.45; font-weight: 600; }
 

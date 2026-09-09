@@ -19,6 +19,7 @@
     fontScale: $("[data-font-scale]"),
     hoverReveal: $("[data-hover-reveal]"),
     requireCompleteBubble: $("[data-require-complete-bubble]"),
+    autoDetectComicRegion: $("[data-auto-detect-comic-region]"),
     allowPaidFallback: $("[data-allow-paid-fallback]"),
     paidUsage: $("[data-paid-usage]"),
     delayValue: $("[data-delay-value]"),
@@ -77,6 +78,7 @@
     elements.fontScale.value = settings.fontScale;
     elements.hoverReveal.checked = settings.hoverReveal !== false;
     elements.requireCompleteBubble.checked = settings.requireCompleteBubble !== false;
+    elements.autoDetectComicRegion.checked = settings.autoDetectComicRegion !== false;
     elements.allowPaidFallback.checked = settings.allowPaidFallback === true;
     updateRangeLabels();
   }
@@ -267,6 +269,7 @@
         fontScale: Number(elements.fontScale.value),
         hoverReveal: elements.hoverReveal.checked,
         requireCompleteBubble: elements.requireCompleteBubble.checked,
+        autoDetectComicRegion: elements.autoDetectComicRegion.checked,
         allowPaidFallback: elements.allowPaidFallback.checked
       });
       renderSettings();
@@ -286,14 +289,22 @@
     elements.serverStatus.textContent = "확인 중";
     elements.serverStatus.className = "status-badge";
     try {
-      const response = await chrome.runtime.sendMessage({ type: "HEALTH_CHECK", serverUrl: elements.serverUrl.value });
+      const response = await chrome.runtime.sendMessage({ type: "GET_RUNTIME_STATUS", serverUrl: elements.serverUrl.value });
       if (!response?.ok) throw new Error(response?.error || "서버에 연결할 수 없습니다.");
-      elements.serverStatus.textContent = "로컬 서버 연결됨";
-      elements.serverStatus.className = "status-badge ready";
-      const pairCount = response.health?.installedTranslationPairs?.length || 0;
-      const summary = paidUsageSummary(response.health?.paidUsage);
+      const runtime = response.runtime;
+      const health = runtime?.health;
+      const compatible = runtime?.compatible === true;
+      elements.serverStatus.textContent = compatible ? "로컬 서버 연결됨" : "버전 불일치";
+      elements.serverStatus.className = `status-badge ${compatible ? "ready" : "warn"}`;
+      const ocrLanguageCount = health?.supportedOcrLanguages?.length || 0;
+      const summary = paidUsageSummary(health?.paidUsage);
       setPaidUsageText(summary.message, summary.kind);
-      setFeedback(elements.settingsFeedback, `로컬 OCR·번역 서버가 응답했습니다. 설치된 번역 경로: ${pairCount}개`);
+      setFeedback(
+        elements.settingsFeedback,
+        compatible
+          ? `확장 ${runtime.extensionVersion} · 서버 ${runtime.serverVersion}이 연결되었습니다. 지원 OCR 언어: ${ocrLanguageCount}개`
+          : `확장 ${runtime?.extensionVersion || "?"} · 서버 ${runtime?.serverVersion || "?"}입니다. 소스 업데이트 뒤에는 로컬 서버를 다시 시작해 버전을 맞춰 주세요.`
+      );
     } catch (error) {
       elements.serverStatus.textContent = "연결 안 됨";
       elements.serverStatus.className = "status-badge error";

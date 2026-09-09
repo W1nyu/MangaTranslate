@@ -10,7 +10,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.ocr import PaddleOcrEngine
+from app.ocr import (
+    FAST_TEXT_DETECTION_LIMIT_SIDE_LEN,
+    TEXT_DETECTION_BOX_THRESHOLD,
+    TEXT_DETECTION_THRESHOLD,
+    PaddleOcrEngine,
+)
 
 
 class V3Result:
@@ -56,8 +61,10 @@ class OcrAdapterTests(unittest.TestCase):
         self.assertFalse(options["enable_mkldnn"])
         self.assertEqual(options["cpu_threads"], 8)
         self.assertFalse(options["use_textline_orientation"])
-        self.assertEqual(options["text_det_limit_side_len"], 960)
+        self.assertEqual(options["text_det_limit_side_len"], FAST_TEXT_DETECTION_LIMIT_SIDE_LEN)
         self.assertEqual(options["text_det_limit_type"], "max")
+        self.assertEqual(options["text_det_thresh"], TEXT_DETECTION_THRESHOLD)
+        self.assertEqual(options["text_det_box_thresh"], TEXT_DETECTION_BOX_THRESHOLD)
 
     def test_cjk_reader_preserves_orientation_and_detector_defaults(self) -> None:
         calls: list[dict[str, object]] = []
@@ -78,6 +85,8 @@ class OcrAdapterTests(unittest.TestCase):
         self.assertTrue(options["use_textline_orientation"])
         self.assertNotIn("text_det_limit_side_len", options)
         self.assertNotIn("text_det_limit_type", options)
+        self.assertEqual(options["text_det_thresh"], TEXT_DETECTION_THRESHOLD)
+        self.assertEqual(options["text_det_box_thresh"], TEXT_DETECTION_BOX_THRESHOLD)
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,11 +23,14 @@ from .models import (
 )
 from .ocr import (
     LTR_LINE_GROUPING_LANGUAGES,
+    VERTICAL_CJK_GROUPING_LANGUAGES,
     PADDLE_LANGUAGE_CODES,
     PaddleOcrEngine,
     UnsupportedOcrLanguage,
+    discard_contained_ocr_regions,
     filter_regions_by_source_language,
     group_ocr_regions,
+    group_vertical_cjk_regions,
 )
 from .translation import TranslationRuntimeError, TranslationService
 
@@ -35,6 +38,7 @@ from .translation import TranslationRuntimeError, TranslationService
 MAX_IMAGE_BYTES = 20_000_000
 MAX_IMAGE_EDGE = 8_000
 MAX_IMAGE_PIXELS = 24_000_000
+APP_VERSION = "0.5.0"
 # We inspect image dimensions before decoding pixels, rather than relying on
 # Pillow's warning-only decompression-bomb threshold.
 Image.MAX_IMAGE_PIXELS = None
@@ -45,7 +49,7 @@ logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
     title="말풍선 번역 레이어 로컬 서버",
-    version="0.2.0",
+    version=APP_VERSION,
     description="Browser screenshots are OCRed and translated on localhost only.",
 )
 
@@ -101,6 +105,7 @@ def _elapsed_ms(started_at: float) -> float:
 def health() -> dict[str, object]:
     return {
         "status": "ok",
+        "version": APP_VERSION,
         "mode": "local-ocr",
         "ocr": "PaddleOCR (lazy-loaded)",
         "ocrLoadedLanguages": ocr_engine.loaded_languages(),
@@ -192,8 +197,15 @@ def translate_image(request: TranslateImageRequest) -> TranslateImageResponse:
         grouped = (
             group_ocr_regions(source_matched)
             if request.sourceLanguage in LTR_LINE_GROUPING_LANGUAGES
+            else group_vertical_cjk_regions(source_matched)
+            if request.sourceLanguage in VERTICAL_CJK_GROUPING_LANGUAGES
             else source_matched
         )
+        # Grouping can legitimately retain a complete bubble and a tighter OCR
+        # fragment from inside it. Keep the complete utterance only before a
+        # cloud provider sees the text, so it cannot become two translated
+        # patches or spend quota twice.
+        grouped = discard_contained_ocr_regions(grouped)
         grouping_ms = _elapsed_ms(grouping_started_at)
 
         confidence_filter_started_at = perf_counter()

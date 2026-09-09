@@ -39,6 +39,7 @@ button.secondary { border: 1px solid #dcd2dc; background: #fffdf9; color: #66596
 button:hover { transform: translateY(-1px); }
 .feedback { min-height: 18px; margin: 12px 0 0; color: #667a6e; font-size: 11px; font-weight: 650; }
 .feedback.error { color: #ad544d; }
+.status-badge.warn { border-color: #ead39e; background: #fff8e8; color: #956b27; }
 
 /* Spending real money is the one setting on this page that is not reversible
    after the fact, so it gets its own framed block instead of sitting in the

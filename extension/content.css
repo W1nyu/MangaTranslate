@@ -39,6 +39,19 @@
   will-change: transform;
 }
 
+/* Normal reading leaves every page interaction untouched. The reader turns
+   this on only after pressing the toolbar's 제외 button. */
+.regions.exclude-mode {
+  pointer-events: auto;
+}
+
+.regions.exclude-mode .translation-region {
+  pointer-events: auto;
+  cursor: not-allowed;
+  outline: 2px solid rgba(255, 114, 114, 0.92);
+  outline-offset: 1px;
+}
+
 /* A remembered translation the reader is pointing at comes back even while the
    layer is showing the original artwork. */
 .translation-region.show-original.is-hover-revealed {

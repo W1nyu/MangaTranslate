@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from io import BytesIO
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -13,7 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.main import translate_image
 from app.models import TranslateImageRequest
-from app.ocr import group_ocr_regions, is_probably_source_language
+from app.ocr import (
+    discard_contained_ocr_regions,
+    group_ocr_regions,
+    group_vertical_cjk_regions,
+    is_probably_source_language,
+)
 from app.translation import ProviderSelection, ProviderTranslationResult
 
 
@@ -36,6 +42,34 @@ def region(
 
 
 class OcrGroupingTests(unittest.TestCase):
+    def test_browser_reader_fixture_keeps_exactly_two_complete_bubbles(self) -> None:
+        fixture_path = Path(__file__).with_name("fixtures") / "reader_two_bubbles_ocr.json"
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+        targets = discard_contained_ocr_regions(fixture["regions"])
+
+        self.assertEqual([target["text"] for target in targets], fixture["expectedTexts"])
+
+    def test_contained_partial_ocr_target_is_discarded(self) -> None:
+        full = region("I will not abandon you.", 100, 20, 240, 82)
+        partial = region("not abandon you", 118, 48, 175, 20)
+
+        self.assertEqual(discard_contained_ocr_regions([full, partial]), [full])
+
+    def test_contained_fragment_must_match_whole_latin_words(self) -> None:
+        full = region("The plan is ready.", 100, 20, 240, 82)
+        # "he" appears inside "The", but is not an independently recognised
+        # word and must not suppress a legitimate tight OCR box on that area.
+        partial = region("he", 118, 48, 20, 20)
+
+        self.assertEqual(discard_contained_ocr_regions([full, partial]), [full, partial])
+
+    def test_same_phrase_in_a_separate_bubble_is_not_discarded(self) -> None:
+        full = region("I will not abandon you.", 100, 20, 240, 82)
+        separate = region("not abandon you", 430, 48, 175, 20)
+
+        self.assertEqual(discard_contained_ocr_regions([full, separate]), [full, separate])
+
     def test_wrapped_lines_merge_to_one_bubble_with_union_geometry(self) -> None:
         grouped = group_ocr_regions(
             [
@@ -51,6 +85,17 @@ class OcrGroupingTests(unittest.TestCase):
         self.assertEqual((bubble["x"], bubble["y"], bubble["width"], bubble["height"]), (100.0, 20.0, 120.0, 64.0))
         expected_confidence = (0.98 * 120 * 18 + 0.94 * 104 * 18 + 0.90 * 80 * 18) / ((120 + 104 + 80) * 18)
         self.assertAlmostEqual(float(bubble["confidence"]), expected_confidence)
+
+    def test_generously_spaced_bubble_lines_stay_together(self) -> None:
+        grouped = group_ocr_regions(
+            [
+                region("Wait for me", 140, 120, 200, 20, 0.94),
+                region("outside", 150, 176, 180, 20, 0.93),
+            ]
+        )
+
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(grouped[0]["text"], "Wait for me outside")
 
     def test_nearby_bubbles_stay_separate_and_results_have_reading_order(self) -> None:
         grouped = group_ocr_regions(
@@ -144,6 +189,26 @@ class OcrGroupingTests(unittest.TestCase):
             ["Top of left bubble Bottom of left bubble", "Side caption"],
         )
 
+    def test_vertical_japanese_characters_in_one_column_merge_top_to_bottom(self) -> None:
+        grouped = group_vertical_cjk_regions(
+            [
+                region("行", 300, 20, 20, 32),
+                region("く", 300, 55, 20, 32),
+                region("よ", 300, 90, 20, 32),
+                # A separate vertical bubble in a different column remains a
+                # separate OCR/translation target.
+                region("待", 220, 24, 20, 32),
+                region("て", 220, 59, 20, 32),
+            ]
+        )
+
+        self.assertEqual([item["text"] for item in grouped], ["行くよ", "待て"])
+        self.assertEqual([(item["x"], item["y"], item["width"], item["height"]) for item in grouped], [(300.0, 20.0, 20.0, 102.0), (220.0, 24.0, 20.0, 67.0)])
+
+    def test_horizontal_cjk_text_is_not_forced_into_vertical_columns(self) -> None:
+        original = [region("こんにちは", 100, 40, 150, 25)]
+        self.assertEqual(group_vertical_cjk_regions(original), original)
+
 
 class OcrSourceLanguageFilterTests(unittest.TestCase):
     def test_rejects_clear_script_mismatches_but_keeps_short_ambiguous_text(self) -> None:
@@ -164,6 +229,37 @@ class OcrSourceLanguageFilterTests(unittest.TestCase):
 
 
 class TranslateImageGroupingTests(unittest.TestCase):
+    def test_translation_never_sends_a_contained_partial_target(self) -> None:
+        image = Image.new("RGB", (8, 8), "white")
+        encoded = BytesIO()
+        image.save(encoded, format="PNG")
+        request = TranslateImageRequest(
+            image=f"data:image/png;base64,{base64.b64encode(encoded.getvalue()).decode('ascii')}",
+            cacheScope="https://comic.test/chapter/395",
+            sourceLanguage="en",
+            targetLanguage="ko",
+            requireCompleteBubble=False,
+        )
+        recognized = [
+            region("I will not abandon you.", 10, 10, 220, 70, 0.98),
+            region("not abandon you", 28, 38, 160, 18, 0.95),
+        ]
+
+        with (
+            patch("app.main.ocr_engine.recognize", return_value=recognized),
+            patch(
+                "app.main.translation_service.translate_many_with_provider",
+                return_value=ProviderTranslationResult(
+                    ["절대 당신을 버리지 않겠습니다."],
+                    ProviderSelection("auto", "deepl"),
+                ),
+            ) as translate_many,
+        ):
+            response = translate_image(request)
+
+        self.assertEqual(translate_many.call_args.args[0], ["I will not abandon you."])
+        self.assertEqual([item.text for item in response.regions], ["I will not abandon you."])
+
     def test_response_exposes_stage_timings_and_the_slowest_stage(self) -> None:
         image = Image.new("RGB", (8, 8), "white")
         encoded = BytesIO()

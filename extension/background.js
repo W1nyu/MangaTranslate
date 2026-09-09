@@ -514,11 +514,22 @@ async function injectContentScripts(tabId) {
 }
 
 function localServerUrl(value) {
-  const url = new URL(String(value));
-  if (!new Set(["127.0.0.1", "localhost"]).has(url.hostname)) {
+  let url;
+  try {
+    url = new URL(String(value));
+  } catch {
+    throw new Error("로컬 서버 주소 형식이 올바르지 않습니다.");
+  }
+  if (url.protocol !== "http:") {
+    throw new Error("로컬 서버 주소는 http://127.0.0.1 또는 http://localhost로 시작해야 합니다.");
+  }
+  if (!new Set(["127.0.0.1", "localhost"]).has(url.hostname) || url.username || url.password) {
     throw new Error("개인정보 보호를 위해 로컬 서버(127.0.0.1 또는 localhost)만 사용할 수 있습니다.");
   }
-  return url.toString().replace(/\/$/, "");
+  if (url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("로컬 서버 주소에는 포트까지만 입력해 주세요. 예: http://127.0.0.1:8765");
+  }
+  return url.origin;
 }
 
 async function requestJson(url, options, timeoutMs = 35000) {
@@ -662,6 +673,27 @@ async function translateVisibleFrame(message, sender) {
 async function healthCheck(serverUrl) {
   const url = localServerUrl(serverUrl || "http://127.0.0.1:8765");
   return requestJson(`${url}/health`, { method: "GET" }, 5000);
+}
+
+async function runtimeStatus(serverUrl) {
+  const extensionVersion = chrome.runtime.getManifest().version;
+  try {
+    const health = await healthCheck(serverUrl);
+    const serverVersion = typeof health?.version === "string" ? health.version : null;
+    return {
+      extensionVersion,
+      serverVersion,
+      compatible: Boolean(serverVersion && serverVersion === extensionVersion),
+      health
+    };
+  } catch (error) {
+    return {
+      extensionVersion,
+      serverVersion: null,
+      compatible: false,
+      error: error?.message || String(error)
+    };
+  }
 }
 
 async function paidUsage(serverUrl) {
@@ -838,6 +870,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "HEALTH_CHECK": {
         const health = await healthCheck(message.serverUrl);
         sendResponse({ ok: true, health });
+        return;
+      }
+
+      case "GET_RUNTIME_STATUS": {
+        const runtime = await runtimeStatus(message.serverUrl);
+        if (runtime.error) throw new Error(runtime.error);
+        sendResponse({ ok: true, runtime });
         return;
       }
 

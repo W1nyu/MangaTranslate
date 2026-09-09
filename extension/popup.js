@@ -117,8 +117,8 @@
   function setReadiness(kind, message, chipText) {
     elements.readiness.className = `readiness${kind ? ` ${kind}` : ""}`;
     elements.readinessText.textContent = message;
-    elements.serverStatus.className = `connection-chip${kind === "ready" ? " ready" : kind === "error" ? " error" : ""}`;
-    elements.serverStatus.textContent = chipText || (kind === "ready" ? "로컬 연결됨" : kind === "error" ? "연결 안 됨" : "확인 중");
+    elements.serverStatus.className = `connection-chip${kind === "ready" ? " ready" : kind === "error" ? " error" : kind === "warn" ? " warn" : ""}`;
+    elements.serverStatus.textContent = chipText || (kind === "ready" ? "로컬 연결됨" : kind === "error" ? "연결 안 됨" : kind === "warn" ? "확인 필요" : "확인 중");
   }
 
   function render() {
@@ -225,10 +225,17 @@
 
   async function refreshHealth() {
     try {
-      const response = await chrome.runtime.sendMessage({ type: "HEALTH_CHECK", serverUrl: settings.serverUrl });
+      const response = await chrome.runtime.sendMessage({ type: "GET_RUNTIME_STATUS", serverUrl: settings.serverUrl });
       if (!response?.ok) throw new Error(response?.error || "서버에 연결할 수 없습니다.");
-      const readiness = providerReadinessMessage(response.health);
-      setReadiness(readiness.kind, `${readiness.message}${paidFallbackNote(response.health)}`, readiness.chipText);
+      const runtime = response.runtime;
+      const health = runtime?.health;
+      const readiness = providerReadinessMessage(health);
+      const versionNote = runtime?.compatible
+        ? ""
+        : ` 확장 ${runtime?.extensionVersion || "?"} · 서버 ${runtime?.serverVersion || "?"}입니다. 로컬 서버를 다시 시작해 버전을 맞춰 주세요.`;
+      const kind = runtime?.compatible || !readiness.ready ? readiness.kind : "warn";
+      const chipText = runtime?.compatible ? readiness.chipText : "버전 불일치";
+      setReadiness(kind, `${readiness.message}${paidFallbackNote(health)}${versionNote}`, chipText);
       return readiness.ready;
     } catch (error) {
       setReadiness("error", "로컬 모델 서버가 꺼져 있어요. README의 1단계에서 서버를 실행한 뒤 다시 열어 주세요.");
