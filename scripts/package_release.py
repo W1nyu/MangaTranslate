@@ -66,7 +66,8 @@ def build():
             validate({name: archive.read(name) for name in archive.namelist()})
         checksums.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")
         print(f"Verified {path.name}: {len(files)} allowlisted files")
-    (output / "SHA256SUMS.txt").write_text("\n".join(checksums) + "\n", encoding="utf-8")
+    # LF only: with CRLF, `sha256sum -c` reads the "\r" as part of each file name.
+    (output / "SHA256SUMS.txt").write_text("\n".join(checksums) + "\n", encoding="utf-8", newline="\n")
 
 
 if __name__ == "__main__":
