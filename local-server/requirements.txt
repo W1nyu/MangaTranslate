@@ -8,4 +8,6 @@ pillow>=12.3,<13
 numpy>=1.26,<2.0
 paddlepaddle>=3.3,<3.4
 paddleocr>=3.7,<3.8
+# Runs the same OCR models ~8x faster than Paddle Inference on CPU (app/ocr.py).
+onnxruntime>=1.20,<2
 argostranslate==1.11.0

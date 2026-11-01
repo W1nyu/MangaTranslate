@@ -43,6 +43,9 @@
 - 한 말풍선의 전체 OCR 문장과 그 안에 완전히 포함된 부분 OCR이 함께 나와도, 부분 OCR은 번역 API에 보내지 않고 번역 패치도 만들지 않습니다. 같은 문구라도 별도 말풍선에 있으면 계속 각각 번역합니다.
 - **0.5.0부터** 직접 영역을 드래그하지 않은 경우 큰 웹툰 이미지·canvas 열을 자동으로 잡아, 뷰어 제목·메뉴·댓글·추천 카드가 OCR에 섞이는 일을 줄입니다. 세부 설정에서 끌 수 있고, 직접 드래그한 영역은 언제나 그 선택을 우선합니다.
 - **0.6.0부터** 같은 말풍선의 전체 문장과 일부 조각(예: `GONE`/`G0NE`)이 겹쳐 검출되면 비교 전용 키와 더 엄격한 기하 조건으로 하나만 남깁니다. 이전 캡처의 조각과도 다시 비교하므로 밴드 스캔 경계에서 번역 패치가 두 겹으로 쌓이지 않습니다.
+- **OCR 엔진 가속**: 같은 PaddleOCR 공식 모델의 ONNX 버전을 ONNX Runtime으로 실행합니다. 합성 웹툰 화면(1440×1300) 기준 OCR이 약 3.6초 → 0.44초로 빨라졌고 인식 결과는 동일했습니다. ONNX 모델(각 5~8MB)은 처음 한 번 내려받으며, 받을 수 없거나 실행에 실패하면 기존 Paddle 엔진으로 자동 전환합니다. `local-server/.env`의 `OCR_ENGINE=paddle`로 기존 엔진을 강제할 수 있고, `/health`의 `ocrEngines`에서 실제 사용 중인 엔진을 확인할 수 있습니다.
+- **번역 품질**: DeepL에는 같은 회차에서 직전에 읽은 말풍선(최대 12개)을 `context`로 함께 보내 말투와 감탄사가 화면 사이에서도 이어집니다(예: `TCH.` → `쳇.`). context는 DeepL 과금 문자 수에 포함되지 않으며, 서버 메모리에만 두고 회차가 바뀌면 비웁니다. 한국어로 번역할 때는 웹툰 대사용 지침(반말 유지, 직역된 그는/그녀는 생략)도 함께 보냅니다. 요청당 약 0.3초가 늘며 `DEEPL_WEBTOON_STYLE=0`으로 끌 수 있습니다.
+- 번역 직전에 영어·라틴 문자 OCR의 흔한 글자 혼동(`G0NE` → `GONE`, `1'M` → `I'M`, `| KNOW` → `I KNOW`)을 바로잡습니다. `LV10`, `1ST`, `10K` 같은 숫자 표기는 그대로 두며, 화면에 표시하는 OCR 원문은 바꾸지 않습니다.
 - 서버가 다른 OCR 요청을 처리 중일 때는 빨간 오류 대신 잠시 후 자동 재시도합니다. OCR 완료 뒤에는 번역 요청을 별도 슬롯에서 처리해, 느린 DeepL·Azure 응답이 다음 화면의 OCR 시작을 막지 않습니다.
 - `<canvas>`와 큰 `background-image` 뷰어도 그림 요소에 붙여 번역 위치를 기억하며, 반응형 이미지의 `srcset` 변경에도 기존 앵커를 유지합니다.
 - 그라데이션 말풍선은 글자 주변 밝기 변화에 맞춰 판정 허용치를 제한적으로 조정합니다. 검은 배경의 흰 글자 지원과 함께, 화면 장식까지 말풍선으로 넓게 잡는 문제를 피하도록 상한을 둡니다.
@@ -97,7 +100,7 @@ notepad .env
 
 열린 `.env`에 아래 두 서비스의 값을 채운 뒤 저장하세요.
 
-1. **Azure Translator F0** — Azure Portal에서 Translator 리소스를 만들고, 리소스의 **Keys and Endpoint** 화면에서 키와 리전을 복사합니다. `AZURE_TRANSLATOR_KEY`, `AZURE_TRANSLATOR_REGION`에 넣고, 별도 엔드포인트가 표시된 경우에만 `AZURE_TRANSLATOR_ENDPOINT`를 바꿉니다. [Azure Translator 빠른 시작](https://learn.microsoft.com/azure/ai-services/translator/text-translation/quickstart/rest-api)
+1. **Azure Translator F0 (Foundry Tools의 Azure Translator)** — 무료 등급(F0)은 매월 200만 자까지 무료입니다. Azure Portal에서 Translator 리소스를 만들거나, Azure 무료·학생 계정이라면 **무료 서비스(Free services)** 화면의 Translator 항목에서 바로 만들 수 있습니다. 가격 책정 계층은 **F0**를 고르세요. 만든 리소스의 **Keys and Endpoint** 화면에서 키와 위치(리전, 예: `koreacentral`)를 복사해 `AZURE_TRANSLATOR_KEY`, `AZURE_TRANSLATOR_REGION`에 넣습니다. `AZURE_TRANSLATOR_ENDPOINT`는 기본 전역 주소 그대로 두면 됩니다. Foundry 포털에 표시되는 `https://<리소스이름>.cognitiveservices.azure.com/` 형식의 리소스 엔드포인트를 넣어도 자동으로 번역 경로(`/translator/text/v3.0/translate`)를 붙여 호출하며, 선택한 네트워크만 허용한 리소스는 이 형식을 써야 합니다. 이번 달 무료 200만 자를 다 쓰면 Azure가 403001을 돌려주고, 서버는 "Azure Translator 무료 등급(F0)의 이번 달 200만 자 한도를 모두 사용했습니다"라고 알린 뒤 다른 엔진으로 넘어갑니다. [Azure Translator 빠른 시작](https://learn.microsoft.com/azure/ai-services/translator/text-translation/quickstart/rest-api)
 2. **DeepL API Free** — DeepL API Free 계정의 **API Keys** 화면에서 인증 키를 복사해 `DEEPL_AUTH_KEY`에 넣습니다. Free 키는 보통 `:fx`로 끝나며, `DEEPL_API_ENDPOINT`는 Free 전용 주소로 그대로 둡니다. [DeepL API 키 안내](https://developers.deepl.com/docs/getting-started/auth)
 
 예시는 다음과 같습니다. 실제 키는 절대로 README, 확장 프로그램 설정, 스크린샷이나 채팅에 붙여 넣지 마세요.
@@ -212,6 +215,8 @@ schtasks /End /TN MangaTranslatorLocalServer
 
 이 규칙이 있으면 `SEOUL`은 일반 번역 결과인 `서울`이 아니라 항상 `세울`로 표시됩니다. 같은 단어의 OCR 오인식이 잦으면 별칭을 별도 항목으로 추가할 수 있습니다.
 
+지정 번역은 문장을 쪼개지 않고 문장 안에 고정한 채 번역합니다. DeepL에는 번역하지 않는 XML 태그로, Azure에는 동적 사전(`mstrans:dictionary`, 영어가 출발·도착 언어 중 하나일 때)으로 전달하므로 `SEOUL IS UNDER ATTACK!`이 `세울이 공격받고 있다!`처럼 조사까지 자연스럽게 붙습니다. 엔진이 고정한 용어를 지키지 못하면 이전 방식(표식 치환 → 용어 주변만 번역)으로 자동 대체합니다.
+
 ## 지원 언어와 품질
 
 UI에는 영어, 한국어, 일본어, 중국어(간체), 스페인어, 프랑스어, 독일어, 포르투갈어, 러시아어, 베트남어를 넣었습니다. Azure·DeepL의 실제 지원 언어와 무료 한도, 유료 요금은 각 계정의 서비스 정책을 따릅니다. 이 확장 프로그램의 월 문자 상한은 과금을 대신 관리해 주는 장치가 아니라 실수로 크게 쓰는 일을 막기 위한 보호선이므로, 실제 청구 금액은 각 서비스 콘솔에서 직접 확인하세요.
@@ -233,7 +238,7 @@ python -m unittest discover -s tests -v
 node --test "extension/tests/**/*.test.mjs"
 ```
 
-브라우저 자바스크립트는 별도의 번들러 없이 작성했습니다. 변경 후 `chrome://extensions`에서 이 확장 프로그램의 새로고침 버튼을 누른 뒤 웹툰 탭도 새로고침하세요. 설정의 **연결 확인**에서 확장과 서버 버전이 모두 `0.6.0`인지 확인하면 소스·서버 불일치를 바로 찾을 수 있습니다. `local-server/tests/fixtures/reader_two_bubbles_ocr.json`은 실제 브라우저 뷰어와 같은 OCR 중복 형상을 익명화한 회귀 테스트 입력입니다. `cd local-server` 뒤 `./.venv/Scripts/python.exe scripts/bench_ocr.py`를 실행하면 밝은·검은·세로형·그라데이션·화면 경계 말풍선의 결정적 파이프라인 회귀와 단계별 시간을 CSV로 출력합니다.
+브라우저 자바스크립트는 별도의 번들러 없이 작성했습니다. 변경 후 `chrome://extensions`에서 이 확장 프로그램의 새로고침 버튼을 누른 뒤 웹툰 탭도 새로고침하세요. 설정의 **연결 확인**에서 확장과 서버 버전이 모두 `0.6.0`인지 확인하면 소스·서버 불일치를 바로 찾을 수 있습니다. `local-server/tests/fixtures/reader_two_bubbles_ocr.json`은 실제 브라우저 뷰어와 같은 OCR 중복 형상을 익명화한 회귀 테스트 입력입니다. `cd local-server` 뒤 `./.venv/Scripts/python.exe scripts/bench_ocr.py`를 실행하면 밝은·검은·세로형·그라데이션·화면 경계 말풍선의 결정적 파이프라인 회귀와 단계별 시간을 CSV로 출력합니다. `scripts/bench_ocr_text.py`는 Windows의 만화풍 글꼴로 실제 대사를 그린 화면에 **실제 OCR 모델**을 돌려 말풍선 인식률·정확 일치율·문자 오류율·페이지당 OCR 시간을 출력합니다. `--engine paddle`로 기존 엔진과 비교하고, `--scale 0.7 --jpeg 70`으로 낮은 캡처 밀도를 흉내 낼 수 있습니다.
 
 ## 주의
 

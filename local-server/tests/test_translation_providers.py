@@ -17,6 +17,7 @@ from app.translation import (
     ProviderRequestError,
     TranslationRuntimeError,
     TranslationService,
+    azure_translate_url,
 )
 
 
@@ -35,6 +36,19 @@ class FakeHttpClient:
     @property
     def last(self) -> tuple[str, dict[str, str], bytes]:
         return self.calls[-1]
+
+
+class ScriptedHttpClient:
+    """Answers each request with the next scripted (status, payload)."""
+
+    def __init__(self, responses: list[tuple[int, object]]) -> None:
+        self._responses = list(responses)
+        self.calls: list[tuple[str, dict[str, str], bytes]] = []
+
+    def post(self, url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        self.calls.append((url, headers, body))
+        status, payload = self._responses.pop(0)
+        return status, json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
 class FakeCloudProvider:
@@ -70,7 +84,7 @@ class TranslationProviderTests(unittest.TestCase):
         self.assertEqual(headers["Ocp-Apim-Subscription-Region"], "koreacentral")
 
     def test_deepl_uses_the_free_endpoint_and_authorization_header(self) -> None:
-        provider = DeepLTranslationProvider("deepl-key", "https://api-free.deepl.com/v2")
+        provider = DeepLTranslationProvider("deepl-key", "https://api-free.deepl.com/v2", webtoon_style=False)
         client = FakeHttpClient({"translations": [{"text": "안녕하세요"}]})
         with patch("app.translation._http_client", client):
             translated = provider.translate_many(["Hello"], "en", "ko")
@@ -267,6 +281,138 @@ class TranslationProviderTests(unittest.TestCase):
     def test_api_model_rejects_argos_provider(self) -> None:
         with self.assertRaises(ValidationError):
             WarmupRequest(sourceLanguage="en", targetLanguage="ko", translationProvider="argos")
+
+    def test_deepl_adds_webtoon_style_only_for_checked_target_languages(self) -> None:
+        provider = DeepLTranslationProvider("deepl-key", webtoon_style=True)
+        client = FakeHttpClient({"translations": [{"text": "번역"}]})
+        with patch("app.translation._http_client", client):
+            provider.translate_many(["Hello"], "en", "ko")
+            korean = json.loads(client.last[2].decode("utf-8"))
+            provider.translate_many(["Hello"], "en", "ja")
+            japanese = json.loads(client.last[2].decode("utf-8"))
+
+        self.assertIn("반말", " ".join(korean["custom_instructions"]))
+        self.assertTrue(all(len(item) <= 300 for item in korean["custom_instructions"]))
+        self.assertNotIn("custom_instructions", japanese)
+
+    def test_deepl_receives_earlier_bubbles_of_the_episode_as_context(self) -> None:
+        deepl = DeepLTranslationProvider("deepl-key", webtoon_style=False)
+        service = TranslationService(azure_provider=FakeCloudProvider("azure", configured=False), deepl_provider=deepl)
+        client = ScriptedHttpClient(
+            [
+                (200, {"translations": [{"text": "괜찮아?"}]}),
+                (200, {"translations": [{"text": "괜찮다고 했잖아!"}, {"text": "쳇."}]}),
+                (200, {"translations": [{"text": "다음 화"}]}),
+            ]
+        )
+        with patch("app.translation._http_client", client):
+            service.translate_many_with_provider(["ARE YOU OKAY?"], "en", "ko", [], "deepl", cache_scope="ep1")
+            service.translate_many_with_provider(["I SAID I'M FINE!", "TCH."], "en", "ko", [], "deepl", cache_scope="ep1")
+            service.translate_many_with_provider(["NEXT"], "en", "ko", [], "deepl", cache_scope="ep2")
+
+        first, second, next_episode = (json.loads(body.decode("utf-8")) for _url, _headers, body in client.calls)
+        # A lone bubble is no context for itself.
+        self.assertNotIn("context", first)
+        self.assertEqual(second["context"], "ARE YOU OKAY?\nI SAID I'M FINE!\nTCH.")
+        self.assertEqual(second["text"], ["I SAID I'M FINE!", "TCH."])
+        # A new episode never sees the previous one's dialogue.
+        self.assertNotIn("context", next_episode)
+
+    def test_deepl_drops_optional_parameters_once_they_are_rejected(self) -> None:
+        provider = DeepLTranslationProvider("deepl-key", webtoon_style=True)
+        client = ScriptedHttpClient(
+            [
+                (400, {"message": "custom_instructions not supported"}),
+                (200, {"translations": [{"text": "안녕"}]}),
+                (200, {"translations": [{"text": "잘 가"}]}),
+            ]
+        )
+        with patch("app.translation._http_client", client):
+            first = provider.translate_many(["Hello"], "en", "ko", context="Hello\nBye")
+            second = provider.translate_many(["Bye"], "en", "ko", context="Hello\nBye")
+
+        bodies = [json.loads(body.decode("utf-8")) for _url, _headers, body in client.calls]
+        self.assertEqual((first, second), (["안녕"], ["잘 가"]))
+        self.assertIn("custom_instructions", bodies[0])
+        self.assertEqual(bodies[1], {"text": ["Hello"], "source_lang": "EN", "target_lang": "KO"})
+        self.assertEqual(bodies[2], {"text": ["Bye"], "source_lang": "EN", "target_lang": "KO"})
+
+    def test_deepl_pins_glossary_terms_with_ignored_xml_tags(self) -> None:
+        deepl = DeepLTranslationProvider("deepl-key", webtoon_style=False)
+        service = TranslationService(azure_provider=FakeCloudProvider("azure", configured=False), deepl_provider=deepl)
+        glossary = [{"source": "SEOUL", "target": "세울", "sourceLanguage": "en", "targetLanguage": "ko"}]
+        client = FakeHttpClient(
+            {"translations": [{"text": "<wtterm>세울</wtterm>이 공격받고 있다! &lt;경보&gt;"}, {"text": "도망쳐 &amp; 숨어!"}]}
+        )
+        with patch("app.translation._http_client", client):
+            result = service.translate_many_with_provider(
+                ["SEOUL IS UNDER ATTACK! <ALERT>", "RUN & HIDE!"], "en", "ko", glossary, "deepl", cache_scope="ep1"
+            )
+
+        body = json.loads(client.last[2].decode("utf-8"))
+        self.assertEqual(result.translations, ["세울이 공격받고 있다! <경보>", "도망쳐 & 숨어!"])
+        # Plain and protected bubbles share one request.
+        self.assertEqual(body["text"], ["<wtterm>세울</wtterm> IS UNDER ATTACK! &lt;ALERT&gt;", "RUN &amp; HIDE!"])
+        self.assertEqual(body["tag_handling"], "xml")
+        self.assertEqual(body["ignore_tags"], ["wtterm"])
+        self.assertEqual(body["context"], "SEOUL IS UNDER ATTACK! &lt;ALERT&gt;\nRUN &amp; HIDE!")
+        self.assertEqual(len(client.calls), 1)
+
+    def test_glossary_falls_back_to_markers_when_a_pinned_term_is_lost(self) -> None:
+        deepl = DeepLTranslationProvider("deepl-key", webtoon_style=False)
+        service = TranslationService(azure_provider=FakeCloudProvider("azure", configured=False), deepl_provider=deepl)
+        glossary = [{"source": "SEOUL", "target": "세울", "sourceLanguage": "en", "targetLanguage": "ko"}]
+        client = ScriptedHttpClient(
+            [
+                (200, {"translations": [{"text": "서울이 공격받고 있다!"}]}),
+                (200, {"translations": [{"text": "[[WTTERM_0000_X]]이 공격받고 있다!"}]}),
+            ]
+        )
+        with patch("app.translation._http_client", client):
+            result = service.translate_many_with_provider(
+                ["SEOUL IS UNDER ATTACK!"], "en", "ko", glossary, "deepl", cache_scope="ep1"
+            )
+
+        self.assertEqual(result.translations, ["세울이 공격받고 있다!"])
+        self.assertEqual(len(client.calls), 2)
+
+    def test_azure_pins_glossary_terms_with_the_dynamic_dictionary(self) -> None:
+        azure = AzureTranslationProvider("azure-key", "koreacentral", "https://api.cognitive.microsofttranslator.com")
+        service = TranslationService(azure_provider=azure, deepl_provider=FakeCloudProvider("deepl", configured=False))
+        glossary = [{"source": "SEOUL", "target": "세울", "sourceLanguage": "en", "targetLanguage": "ko"}]
+        client = FakeHttpClient([{"translations": [{"text": "내일 세울로 돌아갈 거야."}]}])
+        with patch("app.translation._http_client", client):
+            result = service.translate_many_with_provider(
+                ["I'M GOING BACK TO SEOUL TOMORROW."], "en", "ko", glossary, "azure", cache_scope="ep1"
+            )
+
+        body = json.loads(client.last[2].decode("utf-8"))
+        self.assertEqual(result.translations, ["내일 세울로 돌아갈 거야."])
+        self.assertEqual(
+            body,
+            [{"Text": 'I\'M GOING BACK TO <mstrans:dictionary translation="세울">SEOUL</mstrans:dictionary> TOMORROW.'}],
+        )
+
+    def test_azure_resource_domain_endpoints_use_the_translator_path(self) -> None:
+        cases = {
+            "https://api.cognitive.microsofttranslator.com": "https://api.cognitive.microsofttranslator.com/translate",
+            "https://my-res.cognitiveservices.azure.com/": "https://my-res.cognitiveservices.azure.com/translator/text/v3.0/translate",
+            "https://my-res.cognitiveservices.azure.com/translator/text/v3.0": "https://my-res.cognitiveservices.azure.com/translator/text/v3.0/translate",
+            "https://my-res.cognitiveservices.azure.com/translator/text/v3.0/translate?api-version=3.0": "https://my-res.cognitiveservices.azure.com/translator/text/v3.0/translate",
+            "https://translator.example": "https://translator.example/translate",
+        }
+        for endpoint, expected in cases.items():
+            with self.subTest(endpoint=endpoint):
+                self.assertEqual(azure_translate_url(endpoint), expected)
+
+    def test_azure_free_quota_exhaustion_is_named(self) -> None:
+        provider = AzureTranslationProvider("azure-key", "koreacentral", "https://translator.example")
+        client = FakeHttpClient(
+            status=403, body=b'{"error":{"code":403001,"message":"The operation isn\'t allowed because the subscription has exceeded its free quota."}}'
+        )
+        with patch("app.translation._http_client", client):
+            with self.assertRaisesRegex(ProviderRequestError, "200만 자"):
+                provider.translate_many(["Hello"], "en", "ko")
 
     def test_warmup_requires_a_configured_cloud_provider(self) -> None:
         azure = FakeCloudProvider("azure", configured=False)

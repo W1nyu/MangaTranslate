@@ -7,7 +7,15 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.glossary import entries_for_language_pair, find_matches, translate_with_glossary
+from app.glossary import (
+    GLOSSARY_MARKUP_MSTRANS,
+    GLOSSARY_MARKUP_XML,
+    entries_for_language_pair,
+    find_matches,
+    translate_with_glossary,
+    unwrap_glossary_terms,
+    wrap_glossary_terms,
+)
 
 
 def entry(source: str, target: str, **overrides: object) -> SimpleNamespace:
@@ -66,6 +74,32 @@ class GlossaryTests(unittest.TestCase):
         entries = [entry("SEOUL", "세울"), entry("SEOUL", "ソウル", targetLanguage="ja")]
         active = entries_for_language_pair(entries, "en", "ko")
         self.assertEqual([item.target for item in active], ["세울"])
+
+    def test_xml_markup_round_trips_targets_and_escaped_text(self) -> None:
+        text = "SEOUL & JINWOO <3"
+        matches = find_matches(text, [entry("SEOUL", "세울"), entry("JINWOO", "진우")])
+        wrapped = wrap_glossary_terms(text, matches, GLOSSARY_MARKUP_XML)
+        self.assertEqual(wrapped, "<wtterm>세울</wtterm> &amp; <wtterm>진우</wtterm> &lt;3")
+        restored = unwrap_glossary_terms("<wtterm>진우</wtterm>와 <wtterm>세울</wtterm> &lt;3", matches, GLOSSARY_MARKUP_XML)
+        self.assertEqual(restored, "진우와 세울 <3")
+
+    def test_xml_markup_rejects_a_translation_that_lost_a_term(self) -> None:
+        matches = find_matches("SEOUL and JINWOO", [entry("SEOUL", "세울"), entry("JINWOO", "진우")])
+        self.assertIsNone(unwrap_glossary_terms("<wtterm>세울</wtterm>과 진수", matches, GLOSSARY_MARKUP_XML))
+
+    def test_dynamic_dictionary_markup_keeps_the_matched_source(self) -> None:
+        text = "Back to Seoul."
+        matches = find_matches(text, [entry("SEOUL", "세울", caseSensitive=False)])
+        wrapped = wrap_glossary_terms(text, matches, GLOSSARY_MARKUP_MSTRANS)
+        self.assertEqual(wrapped, 'Back to <mstrans:dictionary translation="세울">Seoul</mstrans:dictionary>.')
+        self.assertEqual(unwrap_glossary_terms("세울로 돌아가.", matches, GLOSSARY_MARKUP_MSTRANS), "세울로 돌아가.")
+        self.assertIsNone(unwrap_glossary_terms("서울로 돌아가.", matches, GLOSSARY_MARKUP_MSTRANS))
+
+    def test_dynamic_dictionary_markup_refuses_unsafe_characters(self) -> None:
+        matches = find_matches("SEOUL <3", [entry("SEOUL", "세울")])
+        self.assertIsNone(wrap_glossary_terms("SEOUL <3", matches, GLOSSARY_MARKUP_MSTRANS))
+        quoted = find_matches("SEOUL", [entry("SEOUL", 'the "city"')])
+        self.assertIsNone(wrap_glossary_terms("SEOUL", quoted, GLOSSARY_MARKUP_MSTRANS))
 
 
 if __name__ == "__main__":

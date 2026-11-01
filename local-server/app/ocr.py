@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 import re
 import unicodedata
 from collections import Counter
@@ -9,7 +11,10 @@ from threading import Lock
 from typing import Any
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 PADDLE_LANGUAGE_CODES = {
@@ -261,6 +266,84 @@ def filter_regions_by_source_language(
         for region in regions
         if is_probably_source_language(str(region.get("text", "")), source_language)
     ]
+
+
+# Comic lettering makes the recognizer read O as 0 and I as 1 or |. A cloud
+# translator then sees an unknown token: Azure turned "YOU WERE G0NE FOR SO
+# L0NG" into "you took so long". Only these two glyph pairs are repaired, only
+# inside a word that is otherwise letters, and never in an ordinal or a
+# number-with-unit such as 1ST, 10K or 1990S.
+_OCR_WORD_PATTERN = re.compile(r"[A-Za-z0-9|]+(?:['’][A-Za-z]+)*")
+_NUMBER_WITH_SUFFIX_PATTERN = re.compile(r"^\d+(?:st|nd|rd|th|s|k|m|x|v\d*|am|pm|d|h)$", re.IGNORECASE)
+# A short label followed by a number (LV10, PS1, B1, HP100) is not a misread.
+_LABEL_WITH_NUMBER_PATTERN = re.compile(r"^[A-Za-z]{1,3}\d+$")
+_STANDALONE_I_CONTRACTION_PATTERN = re.compile(r"^[1|](['’](?:m|ll|ve|d))$", re.IGNORECASE)
+# Two-character dialogue words whose single letter would otherwise be too
+# little evidence for the general rule below.
+_MISREAD_SHORT_WORDS = {
+    "n0": "no", "g0": "go", "s0": "so", "t0": "to", "d0": "do",
+    "0f": "of", "0n": "on", "0r": "or", "0h": "oh", "0k": "ok",
+    "1f": "if", "1n": "in", "1t": "it", "1s": "is",
+}
+# Words that commonly follow a standalone "I". A lone "1" before one of them is
+# far more likely a misread pronoun than the number one.
+_FOLLOWS_PRONOUN_I = frozenset({
+    "am", "was", "will", "would", "could", "should", "can", "can't", "cannot", "do", "don't",
+    "did", "didn't", "won't", "wouldn't", "couldn't", "have", "haven't", "had", "think",
+    "thought", "know", "knew", "need", "needed", "want", "wanted", "said", "say", "see",
+    "saw", "mean", "meant", "guess", "just", "really", "never", "always", "already",
+    "love", "hate", "told", "got", "swear", "promise", "bet", "feel", "felt", "must",
+    "might", "hope", "wish", "came", "went", "remember", "forgot", "understand",
+})
+
+
+def _repair_ocr_word(word: str) -> str:
+    contraction = _STANDALONE_I_CONTRACTION_PATTERN.match(word)
+    if contraction:
+        return "I" + contraction.group(1)
+    if not any(character in "01|" for character in word):
+        return word
+    if any(character.isdigit() and character not in "01" for character in word):
+        return word
+    letters = [character for character in word if character.isalpha()]
+    uppercase = sum(1 for character in letters if character.isupper()) >= len(letters) / 2
+    short_word = _MISREAD_SHORT_WORDS.get(word.casefold())
+    if short_word:
+        return short_word.upper() if uppercase else short_word
+    stem = re.split(r"['’]", word, maxsplit=1)[0]
+    if len(letters) < 2 or _NUMBER_WITH_SUFFIX_PATTERN.match(stem) or _LABEL_WITH_NUMBER_PATTERN.match(stem):
+        return word
+    return word.translate(
+        str.maketrans({"0": "O" if uppercase else "o", "1": "I" if uppercase else "l", "|": "I" if uppercase else "l"})
+    )
+
+
+def normalize_ocr_text_for_translation(text: str, source_language: str) -> str:
+    """Repair unambiguous OCR glyph confusions before text goes to a translator.
+
+    Only Latin-script sources are touched; the displayed OCR text is unchanged.
+    """
+    if source_language.strip().lower().split("-", 1)[0] not in LATIN_SOURCE_LANGUAGES:
+        return text
+    words = list(_OCR_WORD_PATTERN.finditer(text))
+    if not words:
+        return text
+    pieces: list[str] = []
+    cursor = 0
+    for index, match in enumerate(words):
+        word = match.group(0)
+        repaired = _repair_ocr_word(word)
+        if repaired == word and word in {"1", "|"}:
+            following = words[index + 1].group(0).casefold().replace("’", "'") if index + 1 < len(words) else ""
+            # "|" is never dialogue punctuation; "1" needs a pronoun-shaped
+            # next word so "1 MORE" or "TAKE 1" survive.
+            if word == "|" or following in _FOLLOWS_PRONOUN_I:
+                repaired = "I"
+        pieces.append(text[cursor : match.start()])
+        pieces.append(repaired)
+        cursor = match.end()
+    pieces.append(text[cursor:])
+    return "".join(pieces)
 
 
 def _normalized_region_text(value: object) -> str:
@@ -783,6 +866,20 @@ def _merge_interleaved_rows(groups: list[dict[str, Any]]) -> list[dict[str, Any]
         del groups[candidate_index]
 
 
+# The lowered detector thresholds also pick up strokes of artwork, which the
+# recognizer reads as a stray "-" or "Y" at low confidence. Such a fragment
+# must not take part in grouping: placed between two bubbles it bridged them
+# into one region, which then looked clipped and dropped *both* bubbles. A real
+# wrapped line has more characters or a confident read, so it still joins.
+NOISE_FRAGMENT_MAX_CHARACTERS = 2
+NOISE_FRAGMENT_MAX_CONFIDENCE = 0.5
+
+
+def _is_noise_fragment(text: str, confidence: float) -> bool:
+    characters = sum(1 for character in text if character.isalnum())
+    return characters <= NOISE_FRAGMENT_MAX_CHARACTERS and confidence < NOISE_FRAGMENT_MAX_CONFIDENCE
+
+
 def group_ocr_regions(regions: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
     """Merge nearby OCR text lines into conservative speech-bubble-sized regions.
 
@@ -809,6 +906,8 @@ def group_ocr_regions(regions: list[dict[str, float | str]]) -> list[dict[str, f
             or height <= 0
             or not all(math.isfinite(value) for value in (x, y, width, height, confidence))
         ):
+            continue
+        if _is_noise_fragment(text, confidence):
             continue
         lines.append(
             {
@@ -967,13 +1066,104 @@ def group_vertical_cjk_regions(regions: list[dict[str, float | str]]) -> list[di
     return sorted(grouped, key=lambda item: (float(item["y"]), float(item["x"])))
 
 
+#: Inference engines, fastest first. ONNX Runtime runs the very same official
+#: PP-OCRv5 weights (PaddleX publishes an ``_onnx`` export of each model) about
+#: 8x faster than Paddle Inference on this project's target CPU - measured
+#: 3.6 s -> 0.44 s for a 1440x1300 synthetic comic viewport, with identical
+#: recognized text. Paddle Inference cannot close that gap itself: its oneDNN
+#: path still fails on the detector under Paddle 3.3's new IR. Paddle stays as
+#: the fallback whenever the ONNX models cannot be fetched or loaded.
+OCR_ENGINE_ONNX = "onnxruntime"
+OCR_ENGINE_PADDLE = "paddle"
+#: ``OCR_ENGINE`` in local-server/.env: ``auto`` (default), ``onnxruntime`` or
+#: ``paddle``. ``auto`` tries ONNX Runtime and silently falls back to Paddle.
+OCR_ENGINE_ENV = "OCR_ENGINE"
+# Eight threads measured fastest for both engines on the target PC; four is
+# ~10% slower and twelve is no faster for the detector.
+OCR_CPU_THREADS = 8
+
+
+def _ocr_engine_preference() -> str:
+    preference = os.environ.get(OCR_ENGINE_ENV, "auto").strip().lower()
+    return preference if preference in {"auto", OCR_ENGINE_ONNX, OCR_ENGINE_PADDLE} else "auto"
+
+
+def _engine_probe_image() -> np.ndarray:
+    """A tiny image with real glyphs, so a probe exercises detection *and* recognition."""
+    image = Image.new("RGB", (160, 48), "white")
+    ImageDraw.Draw(image).text((12, 14), "OK 123", fill="black")
+    return np.asarray(image)
+
+
 class PaddleOcrEngine:
     """Lazy PaddleOCR 3 loader optimized for repeated visible-screen OCR."""
 
     def __init__(self) -> None:
         self._readers: dict[str, Any] = {}
+        self._engines: dict[str, str] = {}
         self._lock = Lock()
         self._inference_lock = Lock()
+
+    @staticmethod
+    def _reader_options(source_language: str, paddle_language: str, recognition_model: str) -> dict[str, Any]:
+        return {
+            "lang": paddle_language,
+            "text_detection_model_name": "PP-OCRv5_mobile_det",
+            "text_recognition_model_name": recognition_model,
+            "device": "cpu",
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": source_language not in FAST_HORIZONTAL_OCR_LANGUAGES,
+            "text_det_thresh": TEXT_DETECTION_THRESHOLD,
+            "text_det_box_thresh": TEXT_DETECTION_BOX_THRESHOLD,
+            "text_det_limit_side_len": (
+                FAST_TEXT_DETECTION_LIMIT_SIDE_LEN
+                if source_language in FAST_HORIZONTAL_OCR_LANGUAGES
+                else CJK_TEXT_DETECTION_LIMIT_SIDE_LEN
+            ),
+            "text_det_limit_type": "max",
+        }
+
+    @staticmethod
+    def _onnx_engine_options() -> dict[str, Any]:
+        return {
+            "engine": OCR_ENGINE_ONNX,
+            # Severity 3 keeps ONNX Runtime's per-initializer load warnings out
+            # of the server console; real errors still raise.
+            "engine_config": {"intra_op_num_threads": OCR_CPU_THREADS, "log_severity_level": 3},
+        }
+
+    @staticmethod
+    def _paddle_engine_options() -> dict[str, Any]:
+        return {
+            # Paddle 3.3's new-IR path currently fails for this detector with
+            # MKLDNN enabled on the supported Intel runtime, so leave it
+            # explicitly off.
+            "enable_mkldnn": False,
+            "cpu_threads": OCR_CPU_THREADS,
+        }
+
+    def _build_reader(self, source_language: str, paddle_language: str, recognition_model: str) -> tuple[Any, str]:
+        from paddleocr import PaddleOCR
+
+        options = self._reader_options(source_language, paddle_language, recognition_model)
+        preference = _ocr_engine_preference()
+        if preference != OCR_ENGINE_PADDLE:
+            try:
+                reader = PaddleOCR(**options, **self._onnx_engine_options())
+                # A reader can construct fine and still fail on its first real
+                # crop, so prove both models run before trusting it.
+                list(reader.predict(_engine_probe_image()))
+                return reader, OCR_ENGINE_ONNX
+            except Exception as error:
+                if preference == OCR_ENGINE_ONNX:
+                    raise
+                logger.warning(
+                    "ONNX Runtime OCR is unavailable for %s (%s); using Paddle Inference instead.",
+                    source_language,
+                    type(error).__name__,
+                )
+        return PaddleOCR(**options, **self._paddle_engine_options()), OCR_ENGINE_PADDLE
 
     def _reader_for(self, source_language: str) -> Any:
         paddle_language = PADDLE_LANGUAGE_CODES.get(source_language)
@@ -983,43 +1173,29 @@ class PaddleOcrEngine:
         with self._lock:
             if paddle_language not in self._readers:
                 try:
-                    from paddleocr import PaddleOCR
-
-                    reader_options: dict[str, Any] = {
-                        "lang": paddle_language,
-                        "text_detection_model_name": "PP-OCRv5_mobile_det",
-                        "text_recognition_model_name": recognition_model,
-                        "device": "cpu",
-                        # Paddle 3.3's new-IR path currently fails for this
-                        # detector with MKLDNN enabled on the supported Intel
-                        # runtime, so leave it explicitly off. Eight CPU
-                        # threads measured faster than the previous four (or
-                        # the package default of ten) on the target PC.
-                        "enable_mkldnn": False,
-                        "cpu_threads": 8,
-                        "use_doc_orientation_classify": False,
-                        "use_doc_unwarping": False,
-                        "use_textline_orientation": source_language not in FAST_HORIZONTAL_OCR_LANGUAGES,
-                        "text_det_thresh": TEXT_DETECTION_THRESHOLD,
-                        "text_det_box_thresh": TEXT_DETECTION_BOX_THRESHOLD,
-                    }
-                    reader_options.update(
-                        {
-                            "text_det_limit_side_len": (
-                                FAST_TEXT_DETECTION_LIMIT_SIDE_LEN
-                                if source_language in FAST_HORIZONTAL_OCR_LANGUAGES
-                                else CJK_TEXT_DETECTION_LIMIT_SIDE_LEN
-                            ),
-                            "text_det_limit_type": "max",
-                        }
-                    )
-
-                    self._readers[paddle_language] = PaddleOCR(**reader_options)
+                    reader, engine = self._build_reader(source_language, paddle_language, recognition_model)
                 except Exception as error:
                     raise RuntimeError(
                         "PaddleOCR 모델을 준비하지 못했습니다. 인터넷 연결과 Python/PaddlePaddle 설치를 확인하세요."
                     ) from error
+                self._readers[paddle_language] = reader
+                self._engines[paddle_language] = engine
             return self._readers[paddle_language]
+
+    def _fall_back_to_paddle(self, source_language: str) -> Any:
+        """Replace a failing ONNX reader for this language for the rest of the process."""
+        paddle_language = PADDLE_LANGUAGE_CODES[source_language]
+        recognition_model = PADDLE_RECOGNITION_MODELS[source_language]
+        from paddleocr import PaddleOCR
+
+        reader = PaddleOCR(
+            **self._reader_options(source_language, paddle_language, recognition_model),
+            **self._paddle_engine_options(),
+        )
+        with self._lock:
+            self._readers[paddle_language] = reader
+            self._engines[paddle_language] = OCR_ENGINE_PADDLE
+        return reader
 
     def warmup(self, source_language: str) -> None:
         """Download, load, and run a tiny inference before the first visible-tab request."""
@@ -1030,6 +1206,12 @@ class PaddleOcrEngine:
         with self._lock:
             loaded = list(self._readers)
         return sorted(reverse_codes.get(language, language) for language in loaded)
+
+    def loaded_engines(self) -> dict[str, str]:
+        """Which inference engine each loaded OCR language actually runs on."""
+        reverse_codes = {paddle_code: app_code for app_code, paddle_code in PADDLE_LANGUAGE_CODES.items()}
+        with self._lock:
+            return {reverse_codes.get(language, language): engine for language, engine in self._engines.items()}
 
     def _recognize_v3(self, reader: Any, image_array: np.ndarray) -> list[dict[str, float | str]]:
         regions: list[dict[str, float | str]] = []
@@ -1060,4 +1242,24 @@ class PaddleOcrEngine:
         # PaddleOCR reader objects are shared between requests; serialize inference to
         # avoid model-state races and keep memory use predictable on a personal PC.
         with self._inference_lock:
-            return self._recognize_v3(reader, image_array)
+            try:
+                return self._recognize_v3(reader, image_array)
+            except Exception as error:
+                with self._lock:
+                    engine = self._engines.get(PADDLE_LANGUAGE_CODES[source_language])
+                if engine != OCR_ENGINE_ONNX or _ocr_engine_preference() == OCR_ENGINE_ONNX:
+                    raise
+                # The probe passed, so this is an input-specific ONNX failure.
+                # Re-read this screen on Paddle rather than losing it.
+                logger.warning(
+                    "ONNX Runtime OCR failed for %s (%s); switching to Paddle Inference.",
+                    source_language,
+                    type(error).__name__,
+                )
+                try:
+                    paddle_reader = self._fall_back_to_paddle(source_language)
+                except Exception as fallback_error:
+                    raise RuntimeError(
+                        "PaddleOCR 모델을 준비하지 못했습니다. 인터넷 연결과 Python/PaddlePaddle 설치를 확인하세요."
+                    ) from fallback_error
+                return self._recognize_v3(paddle_reader, image_array)

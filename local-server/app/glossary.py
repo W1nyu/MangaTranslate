@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+import html
 import re
 from typing import Any
 
@@ -106,6 +107,77 @@ def restore_markers(translated: str, protected: Iterable[ProtectedTerm]) -> str 
             return None
         result = result.replace(item.marker, item.target)
     return result
+
+
+#: Provider-native ways to pin a glossary term inside a whole sentence. Both
+#: hand the provider the *target* term in place, so it can still choose the
+#: grammar around it - "<wtterm>세울</wtterm> IS UNDER ATTACK!" comes back as
+#: "세울이 공격받고 있다!" - where opaque markers made DeepL switch to formal
+#: speech and Azure drop a marker bracket (forcing the fragment fallback).
+GLOSSARY_MARKUP_XML = "xml"  # DeepL: tag_handling=xml + ignore_tags
+GLOSSARY_MARKUP_MSTRANS = "mstrans"  # Azure Translator dynamic dictionary
+GLOSSARY_XML_TAG = "wtterm"
+_GLOSSARY_XML_ELEMENT = re.compile(rf"<{GLOSSARY_XML_TAG}>(.*?)</{GLOSSARY_XML_TAG}>", re.DOTALL)
+
+
+def _xml_escape(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def wrap_glossary_terms(text: str, matches: list[GlossaryMatch], style: str) -> str | None:
+    """Mark glossary hits up for a provider, or return None when it is unsafe.
+
+    A text without hits is still encoded for the style, so it can share the
+    marked-up request with the bubbles that have one.
+    """
+    if style not in {GLOSSARY_MARKUP_XML, GLOSSARY_MARKUP_MSTRANS}:
+        return None
+    pieces: list[str] = []
+    cursor = 0
+    for match in matches:
+        before = text[cursor : match.start]
+        if style == GLOSSARY_MARKUP_XML:
+            pieces.append(_xml_escape(before))
+            pieces.append(f"<{GLOSSARY_XML_TAG}>{_xml_escape(match.target)}</{GLOSSARY_XML_TAG}>")
+        elif style == GLOSSARY_MARKUP_MSTRANS:
+            # Plain-text requests still parse this markup, so a stray angle
+            # bracket or quote could corrupt it. Let the marker path handle those.
+            if any(character in text for character in "<>") or any(character in match.target for character in '<>"'):
+                return None
+            pieces.append(before)
+            pieces.append(
+                f'<mstrans:dictionary translation="{match.target}">{text[match.start:match.end]}</mstrans:dictionary>'
+            )
+        else:
+            return None
+        cursor = match.end
+    after = text[cursor:]
+    pieces.append(_xml_escape(after) if style == GLOSSARY_MARKUP_XML else after)
+    return "".join(pieces)
+
+
+def unwrap_glossary_terms(translated: str, matches: list[GlossaryMatch], style: str) -> str | None:
+    """Return plain translated text, or None if any pinned term did not survive."""
+    expected = sorted(match.target for match in matches)
+    if style == GLOSSARY_MARKUP_XML:
+        found = [html.unescape(value) for value in _GLOSSARY_XML_ELEMENT.findall(translated)]
+        if sorted(found) != expected:
+            return None
+        plain = _GLOSSARY_XML_ELEMENT.sub(lambda element: element.group(1), translated)
+        if f"<{GLOSSARY_XML_TAG}" in plain or f"</{GLOSSARY_XML_TAG}" in plain:
+            return None
+        return html.unescape(plain)
+    if style == GLOSSARY_MARKUP_MSTRANS:
+        if "mstrans" in translated:
+            return None
+        remaining = translated
+        for target in expected:
+            position = remaining.find(target)
+            if position < 0:
+                return None
+            remaining = remaining[:position] + remaining[position + len(target) :]
+        return translated
+    return None
 
 
 def translate_with_glossary(

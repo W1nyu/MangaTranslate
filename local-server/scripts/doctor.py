@@ -14,6 +14,7 @@ REQUIRED_MODULES = {
     "numpy": "numpy",
     "paddle": "paddlepaddle",
     "paddleocr": "paddleocr",
+    "onnxruntime": "onnxruntime",
     "argostranslate": "argostranslate",
 }
 

@@ -133,6 +133,31 @@ class OcrGroupingTests(unittest.TestCase):
         self.assertEqual([item["text"] for item in grouped], ["Left top Left bottom", "Right top Right bottom", "A separate bubble"])
         self.assertEqual([(item["x"], item["y"]) for item in grouped], [(20.0, 10.0), (220.0, 12.0), (20.0, 88.0)])
 
+    def test_low_confidence_artwork_fragments_cannot_bridge_two_bubbles(self) -> None:
+        # Measured on a rendered page: a "-" read from an art stroke and a stray
+        # "Y" between two bubbles chained them into one region, which the bubble
+        # check then rejected as clipped - losing both bubbles.
+        grouped = group_ocr_regions(
+            [
+                region("QUEST COMPLETE! REWARD:", 104, 73, 213, 21, 0.99),
+                region("500 GOLD.", 171, 99, 77, 18, 0.99),
+                region("-", 56, 226, 100, 140, 0.33),
+                region("Y", 133, 325, 6, 9, 0.25),
+                region("NO WAY... IS THAT", 111, 399, 217, 34, 0.97),
+                region("REALLY HIM?", 144, 434, 147, 31, 1.0),
+            ]
+        )
+
+        self.assertEqual(
+            [item["text"] for item in grouped],
+            ["QUEST COMPLETE! REWARD: 500 GOLD.", "NO WAY... IS THAT REALLY HIM?"],
+        )
+
+    def test_confident_short_line_still_joins_its_bubble(self) -> None:
+        grouped = group_ocr_regions([region("WHAT DID YOU SAY", 20, 10, 160), region("?!", 90, 32, 18, 18, 0.9)])
+
+        self.assertEqual([item["text"] for item in grouped], ["WHAT DID YOU SAY ?!"])
+
     def test_same_baseline_fragment_stays_in_its_wrapped_speech_bubble(self) -> None:
         """A detector can isolate the final bold word of one printed line.
 

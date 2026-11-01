@@ -31,6 +31,7 @@ from .ocr import (
     filter_regions_by_source_language,
     group_ocr_regions,
     group_vertical_cjk_regions,
+    normalize_ocr_text_for_translation,
 )
 from .translation import TranslationRuntimeError, TranslationService
 
@@ -113,6 +114,9 @@ def health() -> dict[str, object]:
         "mode": "local-ocr",
         "ocr": "PaddleOCR (lazy-loaded)",
         "ocrLoadedLanguages": ocr_engine.loaded_languages(),
+        # "onnxruntime" normally; "paddle" means the ONNX models could not be
+        # loaded and OCR runs on the slower fallback.
+        "ocrEngines": ocr_engine.loaded_engines(),
         "translation": "DeepL API / Azure Translator",
         "supportedOcrLanguages": sorted(PADDLE_LANGUAGE_CODES),
         "translationProviders": translation_service.provider_metadata(),
@@ -230,7 +234,9 @@ def translate_image(request: TranslateImageRequest) -> TranslateImageResponse:
         else:
             readable, clipped, bubbleless = confident, [], 0
         bubble_filter_ms = _elapsed_ms(bubble_filter_started_at)
-        texts = [str(region["text"]) for region in readable]
+        # The translator gets the repaired text (G0NE -> GONE); the response
+        # keeps what OCR actually read.
+        texts = [normalize_ocr_text_for_translation(str(region["text"]), request.sourceLanguage) for region in readable]
 
         translation_started_at = perf_counter()
         # Release the CPU/model slot before waiting for a network provider.

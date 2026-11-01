@@ -20,7 +20,7 @@ if (-not (Test-Path .\local-server\.env)) { Copy-Item .\local-server\.env.exampl
 notepad .\local-server\.env
 ```
 
-DeepL은 `DEEPL_AUTH_KEY`, Azure는 `AZURE_TRANSLATOR_KEY`와 `AZURE_TRANSLATOR_REGION`을 입력하고 저장합니다. 하나만 설정해도 됩니다. 유료 항목은 선택 사항이며 기본적으로 사용하지 않습니다.
+DeepL은 `DEEPL_AUTH_KEY`, Azure는 `AZURE_TRANSLATOR_KEY`와 `AZURE_TRANSLATOR_REGION`을 입력하고 저장합니다. Azure Translator 무료 등급(F0)은 매월 200만 자까지 무료이며, 리소스의 **Keys and Endpoint**에서 키와 위치(리전)를 복사합니다. 하나만 설정해도 됩니다. 유료 항목은 선택 사항이며 기본적으로 사용하지 않습니다.
 
 4. `start-server.cmd`를 더블클릭합니다. 서버 창은 번역 중 계속 열어 두세요.
 5. Chrome 주소창에서 `chrome://extensions`를 열고 **개발자 모드 → 압축해제된 확장 프로그램을 로드합니다**를 선택한 뒤 배포 폴더의 `extension` 폴더를 지정합니다. Edge는 `edge://extensions`에서 같은 방법으로 설치합니다.
