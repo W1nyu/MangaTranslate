@@ -2,13 +2,13 @@
 
 ## 설치용 배포본
 
-[GitHub Releases](https://github.com/W1nyu/MangaTranslate/releases)에서 `manga-translate-0.6.0-windows.zip`을 내려받고 압축 안의 `INSTALL.md`를 따라 설치하세요. 개발자의 API 키는 포함하지 않으며, 사용자가 본인의 DeepL/Azure 키를 설정해야 합니다. Chrome/Edge 개발자 모드로 설치하는 확장 프로그램과 로컬 OCR 서버를 함께 제공합니다. Chrome 웹 스토어 등록본은 아닙니다.
+[GitHub Releases](https://github.com/W1nyu/MangaTranslate/releases)에서 `manga-translate-0.7.0-windows.zip`을 내려받고 압축 안의 `INSTALL.md`를 따라 설치하세요. 개발자의 API 키는 포함하지 않으며, 사용자가 본인의 DeepL/Azure 키를 설정해야 합니다. Chrome/Edge 개발자 모드로 설치하는 확장 프로그램과 로컬 OCR 서버를 함께 제공합니다. Chrome 웹 스토어 등록본은 아닙니다.
 
 배포 파일 재생성: `python scripts/package_release.py`. 필요한 파일만 명시적으로 담고, 기존 로컬 키 혼입과 ZIP 무결성을 검사합니다.
 
 웹툰 페이지의 **현재 보이는 화면**을 캡처해 OCR하고, 한국어 번역문을 원문 위에 직접 덮어 보여 주는 Chrome/Edge 확장 프로그램입니다. OCR은 내 컴퓨터에서 처리하며, 번역은 사용자가 설정한 DeepL API Free 또는 Azure Translator F0 API를 사용합니다. 무료 한도를 다 쓴 뒤에도 계속 읽고 싶다면, 직접 켠 경우에만 유료 API로 이어서 번역할 수 있습니다([3단계](#3-무료-한도가-끝났을-때-유료-api로-이어서-번역-선택)).
 
-현재 릴리스는 **0.6.0**입니다. 로컬 서버 주소는 `http://127.0.0.1:8765`처럼 포트까지만 입력할 수 있으며, 확장 프로그램은 실제로 캡처한 화면 범위만 번역 기억에 반영합니다.
+현재 릴리스는 **0.7.0**입니다. 로컬 서버 주소는 `http://127.0.0.1:8765`처럼 포트까지만 입력할 수 있으며, 확장 프로그램은 실제로 캡처한 화면 범위만 번역 기억에 반영합니다.
 
 > 웹페이지의 이미지·canvas·cross-origin iframe 안 텍스트는 일반 웹앱이 읽을 수 없습니다. 그래서 이 프로젝트는 웹툰 페이지 위에 작동하는 브라우저 확장 프로그램으로 만들었습니다.
 
@@ -43,7 +43,7 @@
 - 한 말풍선의 전체 OCR 문장과 그 안에 완전히 포함된 부분 OCR이 함께 나와도, 부분 OCR은 번역 API에 보내지 않고 번역 패치도 만들지 않습니다. 같은 문구라도 별도 말풍선에 있으면 계속 각각 번역합니다.
 - **0.5.0부터** 직접 영역을 드래그하지 않은 경우 큰 웹툰 이미지·canvas 열을 자동으로 잡아, 뷰어 제목·메뉴·댓글·추천 카드가 OCR에 섞이는 일을 줄입니다. 세부 설정에서 끌 수 있고, 직접 드래그한 영역은 언제나 그 선택을 우선합니다.
 - **0.6.0부터** 같은 말풍선의 전체 문장과 일부 조각(예: `GONE`/`G0NE`)이 겹쳐 검출되면 비교 전용 키와 더 엄격한 기하 조건으로 하나만 남깁니다. 이전 캡처의 조각과도 다시 비교하므로 밴드 스캔 경계에서 번역 패치가 두 겹으로 쌓이지 않습니다.
-- **OCR 엔진 가속**: 같은 PaddleOCR 공식 모델의 ONNX 버전을 ONNX Runtime으로 실행합니다. 합성 웹툰 화면(1440×1300) 기준 OCR이 약 3.6초 → 0.44초로 빨라졌고 인식 결과는 동일했습니다. ONNX 모델(각 5~8MB)은 처음 한 번 내려받으며, 받을 수 없거나 실행에 실패하면 기존 Paddle 엔진으로 자동 전환합니다. `local-server/.env`의 `OCR_ENGINE=paddle`로 기존 엔진을 강제할 수 있고, `/health`의 `ocrEngines`에서 실제 사용 중인 엔진을 확인할 수 있습니다.
+- **0.7.0부터 OCR 엔진 가속**: 같은 PaddleOCR 공식 모델의 ONNX 버전을 ONNX Runtime으로 실행합니다. 합성 웹툰 화면(1440×1300) 기준 OCR이 약 3.6초 → 0.44초로 빨라졌고 인식 결과는 동일했습니다. ONNX 모델(각 5~8MB)은 처음 한 번 내려받으며, 받을 수 없거나 실행에 실패하면 기존 Paddle 엔진으로 자동 전환합니다. `local-server/.env`의 `OCR_ENGINE=paddle`로 기존 엔진을 강제할 수 있고, `/health`의 `ocrEngines`에서 실제 사용 중인 엔진을 확인할 수 있습니다.
 - **번역 품질**: DeepL에는 같은 회차에서 직전에 읽은 말풍선(최대 12개)을 `context`로 함께 보내 말투와 감탄사가 화면 사이에서도 이어집니다(예: `TCH.` → `쳇.`). context는 DeepL 과금 문자 수에 포함되지 않으며, 서버 메모리에만 두고 회차가 바뀌면 비웁니다. 한국어로 번역할 때는 웹툰 대사용 지침(반말 유지, 직역된 그는/그녀는 생략)도 함께 보냅니다. 요청당 약 0.3초가 늘며 `DEEPL_WEBTOON_STYLE=0`으로 끌 수 있습니다.
 - 번역 직전에 영어·라틴 문자 OCR의 흔한 글자 혼동(`G0NE` → `GONE`, `1'M` → `I'M`, `| KNOW` → `I KNOW`)을 바로잡습니다. `LV10`, `1ST`, `10K` 같은 숫자 표기는 그대로 두며, 화면에 표시하는 OCR 원문은 바꾸지 않습니다.
 - 서버가 다른 OCR 요청을 처리 중일 때는 빨간 오류 대신 잠시 후 자동 재시도합니다. OCR 완료 뒤에는 번역 요청을 별도 슬롯에서 처리해, 느린 DeepL·Azure 응답이 다음 화면의 OCR 시작을 막지 않습니다.
@@ -238,7 +238,7 @@ python -m unittest discover -s tests -v
 node --test "extension/tests/**/*.test.mjs"
 ```
 
-브라우저 자바스크립트는 별도의 번들러 없이 작성했습니다. 변경 후 `chrome://extensions`에서 이 확장 프로그램의 새로고침 버튼을 누른 뒤 웹툰 탭도 새로고침하세요. 설정의 **연결 확인**에서 확장과 서버 버전이 모두 `0.6.0`인지 확인하면 소스·서버 불일치를 바로 찾을 수 있습니다. `local-server/tests/fixtures/reader_two_bubbles_ocr.json`은 실제 브라우저 뷰어와 같은 OCR 중복 형상을 익명화한 회귀 테스트 입력입니다. `cd local-server` 뒤 `./.venv/Scripts/python.exe scripts/bench_ocr.py`를 실행하면 밝은·검은·세로형·그라데이션·화면 경계 말풍선의 결정적 파이프라인 회귀와 단계별 시간을 CSV로 출력합니다. `scripts/bench_ocr_text.py`는 Windows의 만화풍 글꼴로 실제 대사를 그린 화면에 **실제 OCR 모델**을 돌려 말풍선 인식률·정확 일치율·문자 오류율·페이지당 OCR 시간을 출력합니다. `--engine paddle`로 기존 엔진과 비교하고, `--scale 0.7 --jpeg 70`으로 낮은 캡처 밀도를 흉내 낼 수 있습니다.
+브라우저 자바스크립트는 별도의 번들러 없이 작성했습니다. 변경 후 `chrome://extensions`에서 이 확장 프로그램의 새로고침 버튼을 누른 뒤 웹툰 탭도 새로고침하세요. 설정의 **연결 확인**에서 확장과 서버 버전이 모두 `0.7.0`인지 확인하면 소스·서버 불일치를 바로 찾을 수 있습니다. `local-server/tests/fixtures/reader_two_bubbles_ocr.json`은 실제 브라우저 뷰어와 같은 OCR 중복 형상을 익명화한 회귀 테스트 입력입니다. `cd local-server` 뒤 `./.venv/Scripts/python.exe scripts/bench_ocr.py`를 실행하면 밝은·검은·세로형·그라데이션·화면 경계 말풍선의 결정적 파이프라인 회귀와 단계별 시간을 CSV로 출력합니다. `scripts/bench_ocr_text.py`는 Windows의 만화풍 글꼴로 실제 대사를 그린 화면에 **실제 OCR 모델**을 돌려 말풍선 인식률·정확 일치율·문자 오류율·페이지당 OCR 시간을 출력합니다. `--engine paddle`로 기존 엔진과 비교하고, `--scale 0.7 --jpeg 70`으로 낮은 캡처 밀도를 흉내 낼 수 있습니다.
 
 ## 주의
 

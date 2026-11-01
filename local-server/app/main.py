@@ -39,7 +39,7 @@ from .translation import TranslationRuntimeError, TranslationService
 MAX_IMAGE_BYTES = 20_000_000
 MAX_IMAGE_EDGE = 8_000
 MAX_IMAGE_PIXELS = 24_000_000
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 # We inspect image dimensions before decoding pixels, rather than relying on
 # Pillow's warning-only decompression-bomb threshold.
 Image.MAX_IMAGE_PIXELS = None

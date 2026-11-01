@@ -4,7 +4,7 @@
 
 ## 처음 설치
 
-1. `manga-translate-0.6.0-windows.zip`을 다운로드해 원하는 폴더에 압축 해제합니다.
+1. `manga-translate-0.7.0-windows.zip`을 다운로드해 원하는 폴더에 압축 해제합니다.
 2. 압축 해제한 폴더에서 PowerShell을 열고 실행합니다.
 
 ```powershell
