@@ -93,30 +93,62 @@
 
   const anchorKeyByElement = new WeakMap();
   const anchorElementByKey = new Map();
+  const ANCHOR_KEY_PROPERTY = Symbol("webtoonTranslationAnchorKey");
 
   function imageSource(image) {
-    return image.currentSrc || image.getAttribute("src") || "";
+    // `currentSrc` changes when a responsive srcset picks a new candidate on
+    // resize/DPR change. The declared source keeps the same image element's
+    // anchor stable; currentSrc is only the fallback for image-like elements
+    // without a source attribute.
+    return image.getAttribute("src") || image.currentSrc || "";
   }
 
   function rememberAnchorElement(key, element) {
     anchorKeyByElement.set(element, key);
     anchorElementByKey.set(key, new WeakRef(element));
+    try {
+      Object.defineProperty(element, ANCHOR_KEY_PROPERTY, { value: key, configurable: true });
+    } catch {
+      // A non-extensible page-owned element is unusual, but WeakMap caching is
+      // still enough for the current document lifetime.
+    }
   }
 
-  function anchorKeyForImage(element) {
-    const cached = anchorKeyByElement.get(element);
-    if (cached) return cached;
-    const source = imageSource(element);
-    if (!source) return null;
-
-    // Nearly every webtoon panel has a unique URL; the index only disambiguates
-    // the rare repeated asset, and keeps the key reproducible after a reload.
-    let index = 0;
-    for (const image of document.images) {
-      if (image === element) break;
-      if (imageSource(image) === source) index += 1;
+  function elementDomPath(element) {
+    const parts = [];
+    let current = element;
+    while (current instanceof Element && current !== document.documentElement && parts.length < 12) {
+      const parent = current.parentElement;
+      if (!parent) break;
+      const siblings = [...parent.children].filter((sibling) => sibling.tagName === current.tagName);
+      parts.push(`${current.tagName.toLowerCase()}${Math.max(0, siblings.indexOf(current))}`);
+      current = parent;
     }
-    const key = `${source}|${index}`;
+    return parts.reverse().join("/");
+  }
+
+  function anchorKeyFor(element) {
+    const cached = anchorKeyByElement.get(element) || element?.[ANCHOR_KEY_PROPERTY];
+    if (cached) return cached;
+    let key = null;
+    if (element instanceof HTMLImageElement) {
+      const source = imageSource(element);
+      if (source) {
+        // Nearly every webtoon panel has a unique URL; the index only
+        // disambiguates repeated assets and remains reproducible after reload.
+        let index = 0;
+        for (const image of document.images) {
+          if (image === element) break;
+          if (imageSource(image) === source) index += 1;
+        }
+        key = `img:${source}|${index}`;
+      }
+    } else if (element instanceof HTMLCanvasElement) {
+      key = `canvas:${elementDomPath(element)}`;
+    } else if (hasAnchorBackground(element)) {
+      key = `background:${elementDomPath(element)}`;
+    }
+    if (!key) return null;
     rememberAnchorElement(key, element);
     return key;
   }
@@ -132,9 +164,26 @@
     };
   }
 
-  // Resolve every anchor key the store needs in at most one pass over the
-  // document's images. Cached elements cost nothing; only keys whose element was
-  // replaced fall through to the scan.
+  function hasAnchorBackground(element) {
+    if (!(element instanceof Element)) return false;
+    const rect = element.getBoundingClientRect();
+    const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+    if (rect.width * rect.height < viewportArea * 0.1) return false;
+    return getComputedStyle(element).backgroundImage !== "none";
+  }
+
+  function candidatesForAnchorKey(key) {
+    if (key.startsWith("img:")) return document.images;
+    if (key.startsWith("canvas:")) return document.querySelectorAll("canvas");
+    // Background-image anchors are only searched after their cached element
+    // disconnected. This slower fallback avoids a normal sync-wide DOM scan.
+    if (key.startsWith("background:")) return document.querySelectorAll("body *");
+    return [];
+  }
+
+  // Resolve every anchor key the store needs in at most one narrow scan by
+  // anchor type. Cached elements cost nothing; only replaced panels fall
+  // through to a document query.
   function elementRectsForKeys(keys, frame) {
     const rects = new Map();
     const pending = new Set();
@@ -151,28 +200,29 @@
     }
     if (!pending.size) return rects;
 
-    const seenPerSource = new Map();
-    for (const image of document.images) {
-      const source = imageSource(image);
-      if (!source) continue;
-      const index = seenPerSource.get(source) || 0;
-      seenPerSource.set(source, index + 1);
-      const key = `${source}|${index}`;
-      if (!pending.has(key)) continue;
-
-      rememberAnchorElement(key, image);
-      const rect = documentRectOf(image, frame);
-      if (rect) rects.set(key, rect);
-      pending.delete(key);
-      if (!pending.size) break;
+    for (const key of [...pending]) {
+      for (const element of candidatesForAnchorKey(key)) {
+        if (anchorKeyFor(element) !== key) continue;
+        const rect = documentRectOf(element, frame);
+        if (rect) rects.set(key, rect);
+        pending.delete(key);
+        break;
+      }
     }
     return rects;
   }
 
-  function imageAtPoint(x, y) {
+  function anchorTargetAtPoint(x, y) {
     // The overlay host is pointer-events:none, so it never shadows this probe.
-    for (const element of document.elementsFromPoint(x, y)) {
+    const elements = document.elementsFromPoint(x, y);
+    for (const element of elements) {
       if (element instanceof HTMLImageElement && element.naturalWidth > 0) return element;
+    }
+    for (const element of elements) {
+      if (element instanceof HTMLCanvasElement && element.width > 0 && element.height > 0) return element;
+    }
+    for (const element of elements) {
+      if (hasAnchorBackground(element)) return element;
     }
     return null;
   }
@@ -185,11 +235,11 @@
       return documentAnchor(documentRect);
     }
 
-    const image = imageAtPoint(centerX, centerY);
-    if (!image) return documentAnchor(documentRect);
-    const key = anchorKeyForImage(image);
-    const imageRect = key ? documentRectOf(image, frame) : null;
-    return (imageRect && elementAnchor(key, imageRect, documentRect)) || documentAnchor(documentRect);
+    const target = anchorTargetAtPoint(centerX, centerY);
+    if (!target) return documentAnchor(documentRect);
+    const key = anchorKeyFor(target);
+    const targetRect = key ? documentRectOf(target, frame) : null;
+    return (targetRect && elementAnchor(key, targetRect, documentRect)) || documentAnchor(documentRect);
   }
 
   function isExtensionContextInvalidated(error) {
@@ -1533,6 +1583,7 @@
         const skipped = [
           clipped.length ? `잘린 말풍선 ${clipped.length}개는 다음에` : "",
           timings?.bubblelessRegionCount ? `말풍선 밖 글자 ${timings.bubblelessRegionCount}개 제외` : "",
+          merged.collapsed ? `중복 번역 ${merged.collapsed}개 정리` : "",
           merged.dropped ? `사라진 번역 ${merged.dropped}개 정리` : ""
         ].filter(Boolean).join(" · ");
         this.overlay.setStatus(

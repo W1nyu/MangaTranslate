@@ -175,6 +175,19 @@ class BubbleAnalysisTests(unittest.TestCase):
 
         self.assertEqual(analyze_bubble(image, region(160, 150, 420, 250)).status, "complete")
 
+    def test_a_gradient_caption_box_is_still_complete(self) -> None:
+        image = canvas()
+        draw_bubble(image, 120, 100, 460, 300)
+        # The fill changes by more than the historical fixed 46 luminance
+        # points between the text's centre and the outline. Sparse dark glyphs
+        # make this a realistic OCR box without dominating the fill estimate.
+        gradient = np.linspace(96, 244, 194, dtype=np.uint8)[:, None]
+        image[103:297, 123:457] = gradient
+        for y in range(170, 236, 12):
+            image[y:y + 3, 160:420:4] = 30
+
+        self.assertEqual(analyze_bubble(image, region(160, 165, 420, 240)).status, "complete")
+
     def test_a_degenerate_region_is_left_alone(self) -> None:
         image = canvas()
         self.assertEqual(analyze_bubble(image, region(10, 10, 11, 11)).status, "complete")

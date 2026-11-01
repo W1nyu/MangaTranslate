@@ -32,6 +32,43 @@ test("a contained OCR subset does not create a second translation patch", () => 
   assert.equal(result.entries[0].text, "I will not abandon you.");
 });
 
+test("identical same-sized candidates keep exactly one deterministic winner", () => {
+  const result = merge([], [
+    candidate({ documentRect: rect(100, 80, 260, 100), text: "I am here." }),
+    candidate({ documentRect: rect(100, 80, 260, 100), text: "I am here." })
+  ]);
+
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.entries[0].text, "I am here.");
+});
+
+test("a contained fragment with an OCR-confused glyph does not stack a patch", () => {
+  const result = merge([], [
+    candidate({ documentRect: rect(100, 80, 260, 100), text: "I THOUGHT YOU WERE GONE" }),
+    candidate({ documentRect: rect(130, 112, 190, 26), text: "YOU WERE G0NE" })
+  ]);
+
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.entries[0].text, "I THOUGHT YOU WERE GONE");
+});
+
+test("overlap-band fragments collapse against a previously stored full bubble", () => {
+  const first = merge([], [
+    candidate({ documentRect: rect(100, 1_000, 260, 100), text: "I THOUGHT YOU WERE GONE" })
+  ]);
+  const second = merge(
+    first.entries,
+    [
+      candidate({ documentRect: rect(112, 1_014, 110, 32), text: "I THOUGHT YOU" }),
+      candidate({ documentRect: rect(130, 1_052, 150, 32), text: "YOU WERE GONE" })
+    ],
+    { now: 2_000, coveredRect: rect(0, 900, 800, 400) }
+  );
+
+  assert.equal(second.entries.length, 1);
+  assert.equal(second.collapsed, 2);
+});
+
 test("a repeated phrase outside the complete bubble remains a separate target", () => {
   const result = merge([], [
     candidate({ documentRect: rect(100, 80, 260, 100), text: "I will not abandon you." }),

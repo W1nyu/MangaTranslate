@@ -1,0 +1,53 @@
+/* === 기업형 미니멀리즘 테마 토큰 및 실시간 조정 === */
+[data-theme="corporate-minimal"] {
+  /* 동적 테마 토큰 */
+  --theme-bg: #F8FAFC;
+  --theme-surface: #FFFFFF;
+  --theme-surface-subtle: #F1F5F9;
+  --theme-border: #E2E8F0;
+  --theme-text: #0F172A;
+  --theme-text-muted: #64748B;
+  --theme-accent: #2563EB;
+  --theme-accent-secondary: #0EA5E9;
+  --theme-radius: 12px;
+  --theme-border-width: 1px;
+  --theme-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08);
+  --theme-font-family: 'Inter', sans-serif;
+  --theme-glow: 0 0 15px rgba(37, 99, 235, 0.2);
+
+  /* 컬러 팔레트 */
+  --color-pure-white: #FFFFFF;
+  --color-slate-dark: #0F172A;
+  --color-trust-blue: #2563EB;
+  --color-soft-gray: #94A3B8;
+
+  /* 실시간 조정 지표 */
+  --tweak-surface-radius: 12px;
+  --tweak-border-width: 1px;
+  --tweak-shadow-depth: 8px;
+  --tweak-backdrop-blur: 0px;
+  --tweak-glow-intensity: 0.3;
+}
+
+/* === 블로그 CSS === */
+.archetype-blog {
+  background: var(--theme-bg);
+  color: var(--theme-text);
+  font-family: var(--theme-font-family);
+  max-width: 720px;
+  margin: 0 auto;
+  line-height: 1.75;
+}
+.blog-progress-fill {
+  height: 4px;
+  background: var(--theme-accent);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.blog-article-header h1 {
+  font-size: 2rem;
+  color: var(--theme-text);
+  border-bottom: var(--tweak-border-width, 1px) solid var(--theme-border);
+  padding-bottom: 16px;
+}

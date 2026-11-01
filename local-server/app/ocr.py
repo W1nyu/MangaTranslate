@@ -57,6 +57,9 @@ VERTICAL_CJK_GROUPING_LANGUAGES = frozenset({"ja", "zh"})
 # more common there.
 FAST_HORIZONTAL_OCR_LANGUAGES = LTR_LINE_GROUPING_LANGUAGES
 FAST_TEXT_DETECTION_LIMIT_SIDE_LEN = 1280
+# CJK retains more detector detail for small vertical glyphs, but must not send
+# an unbounded high-DPI browser capture through the detector.
+CJK_TEXT_DETECTION_LIMIT_SIDE_LEN = 1536
 # PaddleOCR's defaults (0.3 / 0.6) are tuned for high-contrast document scans.
 # Webtoon text often has outlines, gradients, glows, and reverse colours, so
 # retain weaker detector boxes and let the source-language, confidence, and
@@ -68,6 +71,10 @@ TEXT_DETECTION_BOX_THRESHOLD = 0.48
 # target only when its text and geometry both prove that it is contained in the
 # larger one; close but distinct bubbles must remain independent.
 CONTAINED_REGION_OVERLAP_RATIO = 0.85
+# Geometry-only suppression is a last resort for OCR fragments whose glyphs
+# differ from the complete line. Keep it stricter than text+geometry matching.
+FUZZY_CONTAINED_REGION_OVERLAP_RATIO = 0.95
+GEOMETRY_ONLY_MAX_AREA_RATIO = 0.9
 
 # Script checks are intentionally conservative.  OCR can return names, sound
 # effects, or a one-letter answer, so those ambiguous fragments are kept.  The
@@ -260,6 +267,19 @@ def _normalized_region_text(value: object) -> str:
     return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
 
 
+def _comparison_region_text(value: object) -> str:
+    """Return an OCR-only comparison key without changing displayed text."""
+    normalized = _normalized_region_text(value)
+    compact = "".join(character for character in normalized if character.isalnum())
+    return compact.translate(str.maketrans({
+        "0": "o", "o": "o",
+        "1": "i", "l": "i", "i": "i",
+        "5": "s", "s": "s",
+        "8": "b", "b": "b",
+        "2": "z", "z": "z",
+    }))
+
+
 def _text_contains_fragment(full_text: str, fragment: str) -> bool:
     """Whether a grouped OCR result includes a whole detected fragment.
 
@@ -278,6 +298,16 @@ def _text_contains_fragment(full_text: str, fragment: str) -> bool:
     end = start + len(fragment)
     after = full_text[end] if end < len(full_text) else ""
     return (not before or not before.isalnum()) and (not after or not after.isalnum())
+
+
+def _comparison_text_contains(full_text: str, fragment: str) -> bool:
+    if not full_text or not fragment or len(full_text) < len(fragment):
+        return False
+    # Compact Latin comparison keys no longer have word boundaries. Keep the
+    # existing protection against tiny fragments such as "he" matching "the".
+    if any(character.isascii() and character.isalnum() for character in fragment) and len(fragment) < 3:
+        return False
+    return fragment in full_text
 
 
 def _region_box(region: dict[str, float | str]) -> tuple[float, float, float, float] | None:
@@ -299,6 +329,35 @@ def _contained_area_ratio(inner: tuple[float, float, float, float], outer: tuple
     overlap_width = max(0.0, min(inner_left + inner_width, outer_left + outer_width) - max(inner_left, outer_left))
     overlap_height = max(0.0, min(inner_top + inner_height, outer_top + outer_height) - max(inner_top, outer_top))
     return (overlap_width * overlap_height) / (inner_width * inner_height)
+
+
+def _is_contained_duplicate(
+    inner_box: tuple[float, float, float, float],
+    inner_text: str,
+    outer_box: tuple[float, float, float, float],
+    outer_text: str,
+) -> bool:
+    containment = _contained_area_ratio(inner_box, outer_box)
+    if containment < CONTAINED_REGION_OVERLAP_RATIO:
+        return False
+    exact_text_match = inner_text == outer_text or _text_contains_fragment(outer_text, inner_text)
+    inner_comparison = _comparison_region_text(inner_text)
+    outer_comparison = _comparison_region_text(outer_text)
+    fuzzy_text_match = (
+        inner_comparison == outer_comparison
+        or _comparison_text_contains(outer_comparison, inner_comparison)
+    )
+    if exact_text_match or fuzzy_text_match:
+        return True
+    inner_area = inner_box[2] * inner_box[3]
+    outer_area = outer_box[2] * outer_box[3]
+    return (
+        containment >= FUZZY_CONTAINED_REGION_OVERLAP_RATIO
+        and inner_area <= outer_area * GEOMETRY_ONLY_MAX_AREA_RATIO
+        # A one/two-character box can be a legitimate nearby caption. Without
+        # a reliable text match, geometry alone is not strong enough to erase it.
+        and len(inner_comparison) >= 3
+    )
 
 
 def discard_contained_ocr_regions(regions: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
@@ -331,15 +390,18 @@ def discard_contained_ocr_regions(regions: list[dict[str, float | str]]) -> list
             if not outer_text or outer_box is None:
                 continue
             outer_area = outer_box[2] * outer_box[3]
-            if inner_text == outer_text:
+            inner_comparison = _comparison_region_text(inner_text)
+            outer_comparison = _comparison_region_text(outer_text)
+            if inner_text == outer_text or inner_comparison == outer_comparison:
                 # Equal text is only a duplicate when the competing box is at
-                # least as large. Identical dialogue in a different bubble does
-                # not meet the geometry requirement below.
-                if outer_area < inner_area:
+                # least as large. On an exact area tie, keep the earliest OCR
+                # result deterministically instead of allowing both to remove
+                # one another.
+                if outer_area < inner_area or (outer_area == inner_area and other_index > index):
                     continue
-            elif len(outer_text) <= len(inner_text) or not _text_contains_fragment(outer_text, inner_text):
+            elif not _is_contained_duplicate(inner_box, inner_text, outer_box, outer_text):
                 continue
-            if _contained_area_ratio(inner_box, outer_box) >= CONTAINED_REGION_OVERLAP_RATIO:
+            if _is_contained_duplicate(inner_box, inner_text, outer_box, outer_text):
                 duplicate = True
                 break
         if not duplicate:
@@ -941,13 +1003,16 @@ class PaddleOcrEngine:
                         "text_det_thresh": TEXT_DETECTION_THRESHOLD,
                         "text_det_box_thresh": TEXT_DETECTION_BOX_THRESHOLD,
                     }
-                    if source_language in FAST_HORIZONTAL_OCR_LANGUAGES:
-                        reader_options.update(
-                            {
-                                "text_det_limit_side_len": FAST_TEXT_DETECTION_LIMIT_SIDE_LEN,
-                                "text_det_limit_type": "max",
-                            }
-                        )
+                    reader_options.update(
+                        {
+                            "text_det_limit_side_len": (
+                                FAST_TEXT_DETECTION_LIMIT_SIDE_LEN
+                                if source_language in FAST_HORIZONTAL_OCR_LANGUAGES
+                                else CJK_TEXT_DETECTION_LIMIT_SIDE_LEN
+                            ),
+                            "text_det_limit_type": "max",
+                        }
+                    )
 
                     self._readers[paddle_language] = PaddleOCR(**reader_options)
                 except Exception as error:

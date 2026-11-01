@@ -1,0 +1,32 @@
+[
+  {
+    "id": "light-bubble",
+    "kind": "light",
+    "expected": "complete",
+    "expectedBoxes": 1
+  },
+  {
+    "id": "dark-caption",
+    "kind": "dark",
+    "expected": "complete",
+    "expectedBoxes": 1
+  },
+  {
+    "id": "vertical-caption",
+    "kind": "vertical",
+    "expected": "complete",
+    "expectedBoxes": 1
+  },
+  {
+    "id": "gradient-caption",
+    "kind": "gradient",
+    "expected": "complete",
+    "expectedBoxes": 1
+  },
+  {
+    "id": "bottom-clipped-bubble",
+    "kind": "clipped",
+    "expected": "clipped",
+    "expectedBoxes": 1
+  }
+]

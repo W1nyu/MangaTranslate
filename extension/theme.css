@@ -1,0 +1,55 @@
+/* === 기업형 미니멀리즘 테마 토큰 ===
+   corporate-minimal-blog.css를 확장 프로그램 UI 전체의 공통 토큰으로 옮긴 것입니다.
+   popup.html과 options.html이 이 파일을 먼저 불러오고, 각 페이지 CSS는 값을 직접
+   쓰지 않고 여기 토큰만 참조합니다. 콘텐츠 오버레이는 shadow DOM 안에서 돌아가므로
+   content.css가 같은 값을 자체적으로 들고 있습니다. */
+:root,
+:host,
+[data-theme="corporate-minimal"] {
+  /* 동적 테마 토큰 */
+  --theme-bg: #F8FAFC;
+  --theme-surface: #FFFFFF;
+  --theme-surface-subtle: #F1F5F9;
+  --theme-border: #E2E8F0;
+  --theme-border-strong: #CBD5E1;
+  --theme-text: #0F172A;
+  --theme-text-muted: #64748B;
+  --theme-text-soft: #94A3B8;
+  --theme-accent: #2563EB;
+  --theme-accent-hover: #1D4ED8;
+  --theme-accent-secondary: #0EA5E9;
+  --theme-accent-soft: #EFF6FF;
+  --theme-radius: 12px;
+  --theme-radius-sm: 8px;
+  --theme-radius-lg: 16px;
+  --theme-border-width: 1px;
+  --theme-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08);
+  --theme-shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+  --theme-font-family: Inter, Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --theme-glow: 0 0 15px rgba(37, 99, 235, 0.2);
+  --theme-focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.18);
+
+  /* 컬러 팔레트 */
+  --color-pure-white: #FFFFFF;
+  --color-slate-dark: #0F172A;
+  --color-trust-blue: #2563EB;
+  --color-soft-gray: #94A3B8;
+
+  /* 상태 색 (같은 slate 계열에서 확장) */
+  --state-ok-bg: #ECFDF5;
+  --state-ok-border: #A7F3D0;
+  --state-ok-text: #047857;
+  --state-error-bg: #FEF2F2;
+  --state-error-border: #FECACA;
+  --state-error-text: #B91C1C;
+  --state-warn-bg: #FFFBEB;
+  --state-warn-border: #FDE68A;
+  --state-warn-text: #B45309;
+
+  /* 실시간 조정 지표 */
+  --tweak-surface-radius: 12px;
+  --tweak-border-width: 1px;
+  --tweak-shadow-depth: 8px;
+  --tweak-backdrop-blur: 0px;
+  --tweak-glow-intensity: 0.3;
+}

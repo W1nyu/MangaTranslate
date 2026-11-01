@@ -56,6 +56,24 @@ class OcrGroupingTests(unittest.TestCase):
 
         self.assertEqual(discard_contained_ocr_regions([full, partial]), [full])
 
+    def test_identical_equal_sized_ocr_regions_keep_one_deterministic_winner(self) -> None:
+        first = region("I am here.", 100, 20, 240, 82)
+        second = region("I am here.", 100, 20, 240, 82)
+
+        self.assertEqual(discard_contained_ocr_regions([first, second]), [first])
+
+    def test_confused_ocr_glyph_in_a_contained_fragment_is_discarded(self) -> None:
+        full = region("I THOUGHT YOU WERE GONE", 100, 20, 260, 86)
+        confused_fragment = region("YOU WERE G0NE", 135, 52, 190, 24)
+
+        self.assertEqual(discard_contained_ocr_regions([full, confused_fragment]), [full])
+
+    def test_nearly_identical_geometry_suppresses_unreadable_fragment(self) -> None:
+        full = region("I THOUGHT YOU WERE GONE", 100, 20, 260, 86)
+        unreadable_fragment = region("Y0U W3R3 G?NE", 118, 28, 220, 66)
+
+        self.assertEqual(discard_contained_ocr_regions([full, unreadable_fragment]), [full])
+
     def test_contained_fragment_must_match_whole_latin_words(self) -> None:
         full = region("The plan is ready.", 100, 20, 240, 82)
         # "he" appears inside "The", but is not an independently recognised

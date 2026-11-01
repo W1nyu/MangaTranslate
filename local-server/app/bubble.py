@@ -36,6 +36,13 @@ MIN_INK_RATIO = 0.012
 # How far a pixel may drift from the sampled fill and still count as bubble.
 # Generous enough for paper texture, screentone and JPEG ringing.
 FILL_TOLERANCE = 46
+# A smooth gradient can change more than the fixed tolerance from the centre of
+# a text box to its outline.  The tolerance is allowed to grow from the local
+# ring variance, but the cap keeps a busy illustration from being swallowed as
+# one enormous speech bubble.
+MAX_FILL_TOLERANCE = 78
+FILL_TOLERANCE_RING_PX = 12
+FILL_TOLERANCE_STD_MULTIPLIER = 2.75
 # Fraction of a row or column that must still be fill for the bubble to be
 # considered to continue in that direction. Below 1.0 so a rounded outline or an
 # ascender poking sideways does not end the search early.
@@ -122,6 +129,40 @@ def _ink_ratios(gray: np.ndarray, box: tuple[int, int, int, int], fill_value: fl
     dark = np.count_nonzero(sample <= fill_value - MIN_INK_CONTRAST) / sample.size
     light = np.count_nonzero(sample >= fill_value + MIN_INK_CONTRAST) / sample.size
     return float(dark), float(light)
+
+
+def _fill_tolerance(gray: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Return a bounded fill tolerance adapted to the box's immediate ring.
+
+    The ring deliberately excludes the OCR box itself: glyphs would otherwise
+    inflate the variance and make illustrated backgrounds look like bubbles.
+    Sampling all four sides still captures the gradual luminance change of a
+    vertical or diagonal caption-box gradient.
+    """
+    left, top, right, bottom = box
+    height, width = gray.shape[:2]
+    pad = FILL_TOLERANCE_RING_PX
+    outer_left = max(0, left - pad)
+    outer_top = max(0, top - pad)
+    outer_right = min(width, right + pad)
+    outer_bottom = min(height, bottom + pad)
+    outer = gray[outer_top:outer_bottom, outer_left:outer_right]
+    if not outer.size:
+        return float(FILL_TOLERANCE)
+
+    inner_left = left - outer_left
+    inner_top = top - outer_top
+    inner_right = right - outer_left
+    inner_bottom = bottom - outer_top
+    # The centre must not enter the variance calculation. A boolean mask is
+    # clearer than relying on a luminance value that may be genuine.
+    mask = np.ones(outer.shape, dtype=bool)
+    mask[inner_top:inner_bottom, inner_left:inner_right] = False
+    samples = outer[mask]
+    if not samples.size:
+        return float(FILL_TOLERANCE)
+    adaptive = float(np.std(samples.astype(np.float32))) * FILL_TOLERANCE_STD_MULTIPLIER
+    return float(min(MAX_FILL_TOLERANCE, max(FILL_TOLERANCE, adaptive)))
 
 
 def _outward_run(ratios: np.ndarray) -> int:
@@ -226,7 +267,8 @@ def analyze_bubble(gray: np.ndarray, region: Any) -> BubbleAnalysis:
     else:
         return BubbleAnalysis("absent")
 
-    fill = np.abs(gray.astype(np.int16) - fill_value) <= FILL_TOLERANCE
+    tolerance = _fill_tolerance(gray, box)
+    fill = np.abs(gray.astype(np.int16) - fill_value) <= tolerance
     budget = int(max(MIN_EXPAND_PX, min(MAX_EXPAND_PX, 0.9 * max(right - left, bottom - top))))
     outcome = _expand(fill, box, budget)
 

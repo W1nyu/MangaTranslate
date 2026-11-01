@@ -11,6 +11,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.ocr import (
+    CJK_TEXT_DETECTION_LIMIT_SIDE_LEN,
     FAST_TEXT_DETECTION_LIMIT_SIDE_LEN,
     TEXT_DETECTION_BOX_THRESHOLD,
     TEXT_DETECTION_THRESHOLD,
@@ -66,7 +67,7 @@ class OcrAdapterTests(unittest.TestCase):
         self.assertEqual(options["text_det_thresh"], TEXT_DETECTION_THRESHOLD)
         self.assertEqual(options["text_det_box_thresh"], TEXT_DETECTION_BOX_THRESHOLD)
 
-    def test_cjk_reader_preserves_orientation_and_detector_defaults(self) -> None:
+    def test_cjk_reader_preserves_orientation_with_a_bounded_detector(self) -> None:
         calls: list[dict[str, object]] = []
 
         class FakePaddleOCR:
@@ -83,8 +84,8 @@ class OcrAdapterTests(unittest.TestCase):
         self.assertFalse(options["enable_mkldnn"])
         self.assertEqual(options["cpu_threads"], 8)
         self.assertTrue(options["use_textline_orientation"])
-        self.assertNotIn("text_det_limit_side_len", options)
-        self.assertNotIn("text_det_limit_type", options)
+        self.assertEqual(options["text_det_limit_side_len"], CJK_TEXT_DETECTION_LIMIT_SIDE_LEN)
+        self.assertEqual(options["text_det_limit_type"], "max")
         self.assertEqual(options["text_det_thresh"], TEXT_DETECTION_THRESHOLD)
         self.assertEqual(options["text_det_box_thresh"], TEXT_DETECTION_BOX_THRESHOLD)
 

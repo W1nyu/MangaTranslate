@@ -38,13 +38,17 @@ from .translation import TranslationRuntimeError, TranslationService
 MAX_IMAGE_BYTES = 20_000_000
 MAX_IMAGE_EDGE = 8_000
 MAX_IMAGE_PIXELS = 24_000_000
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 # We inspect image dimensions before decoding pixels, rather than relying on
 # Pillow's warning-only decompression-bomb threshold.
 Image.MAX_IMAGE_PIXELS = None
 ocr_engine = PaddleOcrEngine()
 translation_service = TranslationService()
-processing_slot = BoundedSemaphore(value=1)
+# OCR is serialized to protect Paddle's model state and peak memory. Cloud
+# translation is I/O-bound, so it gets a separate small pool once OCR has
+# finished; a slow provider must not stop the next viewport from being read.
+ocr_slot = BoundedSemaphore(value=1)
+translation_slot = BoundedSemaphore(value=3)
 logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
@@ -115,6 +119,8 @@ def health() -> dict[str, object]:
         "defaultTranslationProvider": "auto",
         "paidFallbackAvailable": translation_service.paid_fallback_available(),
         "paidUsage": translation_service.paid_usage_snapshot(),
+        "ocrConcurrency": 1,
+        "translationConcurrency": 3,
     }
 
 
@@ -132,7 +138,7 @@ def languages() -> dict[str, object]:
 @app.post("/v1/warmup")
 def warmup_ocr(request: WarmupRequest) -> dict[str, object]:
     """Preload the selected OCR language so the first webtoon capture is responsive."""
-    if not processing_slot.acquire(blocking=False):
+    if not ocr_slot.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="다른 화면을 처리 중입니다. 잠시 후 다시 시도하세요.")
     try:
         try:
@@ -159,13 +165,15 @@ def warmup_ocr(request: WarmupRequest) -> dict[str, object]:
             "paidUsage": translation_service.paid_usage_snapshot(),
         }
     finally:
-        processing_slot.release()
+        ocr_slot.release()
 
 
 @app.post("/v1/translate-image", response_model=TranslateImageResponse)
 def translate_image(request: TranslateImageRequest) -> TranslateImageResponse:
-    if not processing_slot.acquire(blocking=False):
+    if not ocr_slot.acquire(blocking=False):
         raise HTTPException(status_code=429, detail="다른 화면을 처리 중입니다. 잠시 후 다시 시도하세요.")
+    ocr_acquired = True
+    translation_acquired = False
     request_started_at = perf_counter()
     try:
         decode_started_at = perf_counter()
@@ -225,6 +233,12 @@ def translate_image(request: TranslateImageRequest) -> TranslateImageResponse:
         texts = [str(region["text"]) for region in readable]
 
         translation_started_at = perf_counter()
+        # Release the CPU/model slot before waiting for a network provider.
+        # A later screenshot can now run OCR while this one is in flight.
+        ocr_slot.release()
+        ocr_acquired = False
+        translation_slot.acquire()
+        translation_acquired = True
         try:
             translation_result = translation_service.translate_many_with_provider(
                 texts,
@@ -324,4 +338,7 @@ def translate_image(request: TranslateImageRequest) -> TranslateImageResponse:
             processingTimings=timings,
         )
     finally:
-        processing_slot.release()
+        if translation_acquired:
+            translation_slot.release()
+        if ocr_acquired:
+            ocr_slot.release()

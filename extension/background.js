@@ -539,7 +539,13 @@ async function requestJson(url, options, timeoutMs = 35000) {
     const response = await fetch(url, { ...options, signal: controller.signal });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.detail || data.message || `로컬 서버 오류 (${response.status})`);
+      const error = new Error(data.detail || data.message || `로컬 서버 오류 (${response.status})`);
+      error.status = response.status;
+      const retryAfterSeconds = Number(response.headers.get("retry-after"));
+      if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+        error.retryAfter = Math.round(retryAfterSeconds * 1_000);
+      }
+      throw error;
     }
     return data;
   } catch (error) {
@@ -628,21 +634,31 @@ async function translateVisibleFrame(message, sender) {
     // script already holds those translations, so nothing needs to happen.
     return { throttled: false, unchanged: true };
   }
-  const payload = await requestJson(`${serverUrl}/v1/translate-image`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      image: captured.image,
-      cacheScope: message.cacheScope,
-      sourceLanguage: message.settings?.sourceLanguage,
-      targetLanguage: message.settings?.targetLanguage,
-      translationProvider: message.settings?.translationProvider,
-      allowPaidFallback: message.settings?.allowPaidFallback === true,
-      minConfidence: message.settings?.minConfidence,
-      requireCompleteBubble: message.settings?.requireCompleteBubble !== false,
-      glossary: Array.isArray(message.glossary) ? message.glossary : []
-    })
-  });
+  let payload;
+  try {
+    payload = await requestJson(`${serverUrl}/v1/translate-image`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        image: captured.image,
+        cacheScope: message.cacheScope,
+        sourceLanguage: message.settings?.sourceLanguage,
+        targetLanguage: message.settings?.targetLanguage,
+        translationProvider: message.settings?.translationProvider,
+        allowPaidFallback: message.settings?.allowPaidFallback === true,
+        minConfidence: message.settings?.minConfidence,
+        requireCompleteBubble: message.settings?.requireCompleteBubble !== false,
+        glossary: Array.isArray(message.glossary) ? message.glossary : []
+      })
+    });
+  } catch (error) {
+    // Another tab can be warming an OCR model or translating while this tab
+    // captures. This is back-pressure, not a reader-visible translation error.
+    if (error?.status === 429) {
+      return { throttled: true, retryAfter: error.retryAfter || 500 };
+    }
+    throw error;
+  }
 
   // `regions` and `imageWidth`/`imageHeight` deliberately remain in the cropped
   // image's pixel space. Content can map them back to the full overlay with the

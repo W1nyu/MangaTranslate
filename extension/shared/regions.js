@@ -23,6 +23,11 @@
   // inside the complete bubble's box. Text alone is not enough: dialogue such
   // as "No" can naturally recur in adjacent bubbles.
   const CONTAINED_REGION_OVERLAP_RATIO = 0.85;
+  // OCR fragments with one confused glyph cannot always satisfy text
+  // containment. Geometry alone is therefore allowed only under a materially
+  // stricter threshold than normal text+geometry containment.
+  const FUZZY_CONTAINED_REGION_OVERLAP_RATIO = 0.95;
+  const GEOMETRY_ONLY_MAX_AREA_RATIO = 0.9;
   // How many times a capture may cover a stored bubble without finding it again
   // before it is treated as gone. OCR occasionally misses a bubble it read a
   // moment ago, so one miss is not enough to remove a translation.
@@ -192,6 +197,47 @@
     return !/[a-z0-9]/i.test(before) && !/[a-z0-9]/i.test(after);
   }
 
+  function comparisonRegionText(value) {
+    return normalizeRegionText(value)
+      .replace(/[\s\p{P}\p{S}_]+/gu, "")
+      // These are OCR comparison keys only. Displayed OCR text remains exactly
+      // as Paddle returned it, while common digit/letter confusions compare as
+      // one value.
+      .replace(/[0o]/g, "o")
+      .replace(/[1li]/g, "i")
+      .replace(/[5s]/g, "s")
+      .replace(/[8b]/g, "b")
+      .replace(/[2z]/g, "z");
+  }
+
+  function comparisonTextContains(fullText, fragment) {
+    if (!fullText || !fragment || fullText.length < fragment.length) return false;
+    // A one/two-character Latin OCR piece is too ambiguous after whitespace
+    // removal ("he" must not match "the"). CJK remains safe because it has
+    // no Latin characters to trigger this guard.
+    if (/[a-z0-9]/i.test(fragment) && fragment.length < 3) return false;
+    return fullText.includes(fragment);
+  }
+
+  function isContainedDuplicate(innerRect, innerText, outerRect, outerText) {
+    const innerArea = rectArea(innerRect);
+    const outerArea = rectArea(outerRect);
+    const containment = innerArea > 0 ? rectIntersectionArea(innerRect, outerRect) / innerArea : 0;
+    if (containment < CONTAINED_REGION_OVERLAP_RATIO) return false;
+
+    const exactTextMatch = innerText === outerText || textContainsWholeFragment(outerText, innerText);
+    const innerComparison = comparisonRegionText(innerText);
+    const outerComparison = comparisonRegionText(outerText);
+    const fuzzyTextMatch = innerComparison === outerComparison || comparisonTextContains(outerComparison, innerComparison);
+    if (exactTextMatch || fuzzyTextMatch) return true;
+
+    return containment >= FUZZY_CONTAINED_REGION_OVERLAP_RATIO
+      && innerArea <= outerArea * GEOMETRY_ONLY_MAX_AREA_RATIO
+      // A tiny unrelated caption can sit over a larger bubble. Do not erase it
+      // on geometry alone; short text needs a textual containment signal.
+      && innerComparison.length >= 3;
+  }
+
   function discardContainedCandidates(candidates) {
     const values = (Array.isArray(candidates) ? candidates : []).filter(Boolean);
     return values.filter((candidate, index) => {
@@ -207,16 +253,83 @@
         if (!outerRect || !outerText) return false;
 
         const outerArea = rectArea(outerRect);
-        if (candidateText === outerText) {
+        const candidateComparison = comparisonRegionText(candidateText);
+        const outerComparison = comparisonRegionText(outerText);
+        if (candidateText === outerText || candidateComparison === outerComparison) {
           // Retain one deterministic winner for identical overlapping OCR boxes.
           if (outerArea < candidateArea || (outerArea === candidateArea && outerIndex > index)) return false;
-        } else if (outerText.length <= candidateText.length || !textContainsWholeFragment(outerText, candidateText)) {
+        } else if (!isContainedDuplicate(candidateRect, candidateText, outerRect, outerText)) {
           return false;
         }
 
-        return rectIntersectionArea(candidateRect, outerRect) >= candidateArea * CONTAINED_REGION_OVERLAP_RATIO;
+        return isContainedDuplicate(candidateRect, candidateText, outerRect, outerText);
       });
     });
+  }
+
+  function collapseContainedEntries(entries, coveredRect) {
+    const covered = finiteRect(coveredRect);
+    if (!covered || !Array.isArray(entries) || entries.length < 2) return { collapsed: 0, survivorIds: new Set() };
+    const parent = entries.map((_, index) => index);
+    const find = (index) => {
+      let current = index;
+      while (parent[current] !== current) {
+        parent[current] = parent[parent[current]];
+        current = parent[current];
+      }
+      return current;
+    };
+    const join = (first, second) => {
+      const firstRoot = find(first);
+      const secondRoot = find(second);
+      if (firstRoot !== secondRoot) parent[secondRoot] = firstRoot;
+    };
+    const eligible = (entry) => {
+      const rect = finiteRect(entry?.documentRect);
+      return Boolean(rect && rectIntersectionArea(rect, covered) >= rectArea(rect) * 0.9);
+    };
+
+    for (let first = 0; first < entries.length; first += 1) {
+      if (!eligible(entries[first])) continue;
+      const firstRect = finiteRect(entries[first]?.documentRect);
+      const firstText = entries[first]?.normalizedText ?? normalizeRegionText(entries[first]?.text);
+      if (!firstRect || !firstText) continue;
+      for (let second = first + 1; second < entries.length; second += 1) {
+        if (!eligible(entries[second])) continue;
+        const secondRect = finiteRect(entries[second]?.documentRect);
+        const secondText = entries[second]?.normalizedText ?? normalizeRegionText(entries[second]?.text);
+        if (!secondRect || !secondText) continue;
+        if (
+          isContainedDuplicate(firstRect, firstText, secondRect, secondText)
+          || isContainedDuplicate(secondRect, secondText, firstRect, firstText)
+        ) {
+          join(first, second);
+        }
+      }
+    }
+
+    const groups = new Map();
+    entries.forEach((entry, index) => {
+      const root = find(index);
+      const group = groups.get(root) || [];
+      group.push({ entry, index });
+      groups.set(root, group);
+    });
+    const remove = new Set();
+    const survivorIds = new Set();
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      group.sort((first, second) => (
+        Number(second.entry.lastSeenAt || 0) - Number(first.entry.lastSeenAt || 0)
+        || rectArea(second.entry.documentRect) - rectArea(first.entry.documentRect)
+        || String(first.entry.id).localeCompare(String(second.entry.id))
+      ));
+      survivorIds.add(group[0].entry.id);
+      for (const loser of group.slice(1)) remove.add(loser.index);
+    }
+    if (!remove.size) return { collapsed: 0, survivorIds };
+    for (const index of [...remove].sort((first, second) => second - first)) entries.splice(index, 1);
+    return { collapsed: remove.size, survivorIds };
   }
 
   function anchorRelRect(anchor) {
@@ -410,6 +523,12 @@
       added += 1;
     }
 
+    // A complete bubble can arrive in one capture and its line fragments in the
+    // next overlap band. Incoming-only filtering misses that case, so collapse
+    // the covered store component before deciding which old entries are absent.
+    const collapse = collapseContainedEntries(working, coveredRect);
+    for (const id of collapse.survivorIds) consumed.add(id);
+
     let dropped = 0;
     if (coveredRect) {
       for (let index = working.length - 1; index >= 0; index -= 1) {
@@ -437,7 +556,7 @@
       working.splice(0, working.length - maxEntries);
     }
 
-    return { entries: working, added, updated, dropped };
+    return { entries: working, added, updated, dropped, collapsed: collapse.collapsed };
   }
 
   function normalizedCaptureRegion(value) {
@@ -653,6 +772,9 @@
     DEFAULT_TEXT_PROXIMITY_RATIO,
     DEFAULT_MAX_ENTRIES,
     DEFAULT_MAX_MISSES,
+    CONTAINED_REGION_OVERLAP_RATIO,
+    FUZZY_CONTAINED_REGION_OVERLAP_RATIO,
+    GEOMETRY_ONLY_MAX_AREA_RATIO,
     DEFAULT_BAND_OVERLAP_PX,
     DEFAULT_MIN_BAND_PX,
     DEFAULT_MAX_BAND_RATIO,
@@ -664,6 +786,7 @@
     rectCenterDistance,
     autoCaptureRegionFromContentRects,
     normalizeRegionText,
+    comparisonRegionText,
     discardContainedCandidates,
     anchorRelRect,
     resolveAnchorRect,
